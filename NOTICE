@@ -1,0 +1,19 @@
+Audioserver NG - Hinweise zu fremder Software
+
+1. sonn core (https://github.com/sonn-audio/core) - Apache License 2.0
+   Dieses Plugin enthaelt KEINEN Code von sonn core. Es laedt auf Knopfdruck das unveraenderte Abbild
+   ghcr.io/sonn-audio/core in einer festgelegten Fassung (Digest, siehe bin/asn_abbild.json) und startet es als
+   Docker-Container. Fuer sonn core gilt dessen Lizenz: die LICENSE-Datei des Projekts ist die Apache License 2.0
+   (die package.json nennt "ISC"; massgeblich ist fuer uns die LICENSE-Datei). Fehler in sonn core bitte dort melden.
+
+2. Audioserver4Home (https://github.com/mschlenstedt/LoxBerry-Plugin-Audioserver4Home)
+   Copyright Michael Schlenstedt, Apache License 2.0.
+   Kein Code uebernommen. Als Idee aufgegriffen: sonn core als Container aus einem LoxBerry-Plugin heraus zu starten.
+   Die Umsetzung (macvlan mit fester MAC, festgelegte Fassung, Gateway V2) ist neu geschrieben.
+
+3. Befehlsbruecke (bin/befehlsbruecke.php, bin/befehlsbruecke.sh)
+   Gemeinsames Modul der Plugins dieses Autorenkreises (Stammfassung 1.0.2), byte-gleich mit der Stammfassung.
+
+"Loxone", "Loxone Config", "Audioserver" und "Music Server" sind Bezeichnungen der Loxone Electronics GmbH. Dieses
+Plugin steht in keiner Verbindung zu Loxone. "Google Cast" ist eine Bezeichnung der Google LLC. "sonn" ist ein
+Projekt von sonn-audio; dieses Plugin steht in keiner Verbindung zu sonn-audio.

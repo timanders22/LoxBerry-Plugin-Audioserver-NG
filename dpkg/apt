@@ -1,0 +1,8 @@
+# Diese Pakete installiert LoxBerry mit "apt-get -y install" als root waehrend der Plugin-Installation.
+#
+# mosquitto-clients: mosquitto_sub/mosquitto_pub fuer die Befehlsbruecke 1.0.2 (Befehle aus Loxone ueber das
+# MQTT-Gateway V2). Die Werte gehen ueber den UDP-Eingang des Gateways und brauchen das Paket nicht.
+#
+# Bewusst NICHT eingetragen: Docker. Es kommt nicht aus der Paketquelle des Plugins (zum Beispiel ueber Docker NG);
+# fehlt es, sagen es preinstall.sh, der Reiter Test und bin/healthcheck.
+mosquitto-clients

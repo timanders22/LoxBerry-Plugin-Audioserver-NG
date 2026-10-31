@@ -1,0 +1,23 @@
+#!/bin/sh
+# Audioserver NG - Takt, minuetlich (laeuft als loxberry). Misst Container und sonn und sendet ueber das MQTT-Gateway V2.
+# Den bin- und den Log-Pfad setzt der Installer ein. Ausdruecklich ueber php aufrufen (geht das Ausfuehrungsrecht
+# verloren, laeuft der Takt trotzdem). Fehler des Laufs gehen nach takt.err (die Ausgabe des Laufs nicht); der Reiter
+# Logdateien zeigt die Datei, sobald etwas darin steht.
+# Fremdpruefung 31.10.2026, T2-3 (Hausform Regeln/06, Bauart MGiSmart 1.1.28): log/ liegt im Arbeitsspeicher (zram).
+# LoxBerry legt den Ordner beim Start an (createpluginfolders.pl vor cron, am LoxBerry gelesen) - trotzdem wird er hier
+# angelegt, sonst scheiterte schon die Umlenkung. touch frischt die Aenderungszeit auf; ueber 256 kB bleiben die letzten
+# 300 Zeilen (die Logwartung von LoxBerry kuerzt nur *.log).
+LOGV="REPLACELBPLOGDIR"
+ERR="$LOGV/takt.err"
+mkdir -p "$LOGV" 2>/dev/null
+touch "$ERR" 2>/dev/null
+if [ -f "$ERR" ] && [ "$(stat -c %s "$ERR" 2>/dev/null || echo 0)" -gt 262144 ]; then
+    tail -n 300 "$ERR" > "$ERR.neu" 2>/dev/null && mv -f "$ERR.neu" "$ERR"
+fi
+if [ ! -f "REPLACELBPBINDIR/asn_takt.php" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] cron.01min: REPLACELBPBINDIR/asn_takt.php fehlt - Plugin neu installieren." >> "$ERR"
+    exit 1
+fi
+php "REPLACELBPBINDIR/asn_takt.php" >/dev/null 2>>"$ERR"
+# Waechter der Befehlsbruecke 1.0.2: startet, haelt an, sendet audioserverng/status/befehle. Fehler bleiben auf stderr.
+/bin/bash "REPLACELBPBINDIR/befehlsbruecke.sh" waechter >/dev/null

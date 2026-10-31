@@ -1,0 +1,7 @@
+{
+    "_hinweis": "Audioserver NG - das festgelegte Abbild von sonn core (EINE Quelle). Gelesen am 30.10.2026 aus der Registry ghcr.io (Index-Digest, gleich den Tags beta und beta-latest zum Lesezeitpunkt). Ein Update laeuft nur ueber die Oberflaeche mit Ja und neuem Digest.",
+    "repo": "ghcr.io/sonn-audio/core",
+    "digest": "sha256:f3fb20d13d28edcfb6888cdbb0b82a680af51ee438f3a1b631beea8ee701a55d",
+    "tag": "4.0.0-beta.22",
+    "datum": "2026-10-10"
+}

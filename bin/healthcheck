@@ -1,0 +1,43 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Audioserver NG - Anschluss an den LoxBerry-Healthcheck (Bauart Xiaomi Licht 0.9.3).
+ *
+ * LoxBerry ruft bin/healthcheck als loxberry auf - einmal mit 'title', einmal mit 'check'. Antwort: JSON mit desc,
+ * status, result, logfile; Status 3 Fehler, 4 Warnung, 5 in Ordnung, 6 Hinweis. NUR AUS DATEIEN (zustand.json des
+ * Takts, Konfiguration, Merker): kein docker-Aufruf, nichts angelegt, unter 1 s. Die Stufen rechnet asn_gesundheit().
+ */
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+ini_set('display_errors', '0');
+
+$asn_was = isset($argv[1]) ? strtolower((string) $argv[1]) : 'check';
+if ($asn_was === 'title') {
+    echo "Audioserver NG\n";
+    exit(0);
+}
+if (basename(dirname(__DIR__)) === 'plugins' && basename(dirname(dirname(__DIR__))) === 'bin') {
+    $asn_lib = dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/' . basename(__DIR__) . '/asn_lib.php';
+} else {
+    $asn_lib = dirname(__DIR__) . '/webfrontend/html/asn_lib.php';
+}
+if (!is_file($asn_lib)) {
+    echo json_encode(array('desc' => 'Audioserver NG', 'status' => 3,
+        'result' => 'Die Bibliothek asn_lib.php wurde nicht gefunden - das Plugin ist unvollstaendig installiert.')) . "\n";
+    exit(0);
+}
+require_once $asn_lib;
+if (asn_paths()['home'] === '') {
+    // Fremdpruefung 31.10.2026, T3-3 (Bauart MGiSmart): ausserhalb einer LoxBerry-Installation Status 3 statt einer
+    // Aussage ueber eine Verwaltung, die es hier nicht gibt.
+    echo json_encode(array('desc' => 'Audioserver NG', 'status' => 3, 'result' => asn_klartext('GESUND.KEINE_WURZEL')),
+        JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+    exit(0);
+}
+list($asn_status, $asn_text) = asn_gesundheit();
+echo json_encode(array(
+    'desc'    => 'Audioserver NG',
+    'status'  => (int) $asn_status,
+    'result'  => (string) $asn_text,
+    'logfile' => asn_paths()['log'],
+), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+exit(0);

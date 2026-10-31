@@ -1,0 +1,176 @@
+#!/bin/bash
+# Audioserver NG - uninstall/uninstall (Bauart Xiaomi Licht 0.9.3). Laeuft als root.
+# - nur fuer DIESES Plugin (Name in $2 = audioserverng), nie ein Praefixmuster aus dem Ordnernamen (Gedaechtnis
+#   Uninstall-Praefix: zigbee2mqtt riss zigbee2mqttng mit);
+# - Befehlsbruecke stoppen; zurueckbehaltene Zonenthemen audioserverng/zone<n>/... abraeumen (asn_takt.php
+#   --mqtt-leeren als loxberry);
+# - den EIGENEN sonn-Container (Name UND beide Labels) anhalten und entfernen (Frage F7: ein Container mit
+#   unless-stopped ohne Plugin waere verwaist). Das eigene Netz nur, wenn es beide Labels traegt und kein Container
+#   mehr daran haengt. Ein mitgenutztes Netz, das Abbild, der Probe-Container und der Datenordner von sonn
+#   (data/plugins/<ordner>.sonn: Konto, Kopplung, Bibliothek) BLEIBEN - geloescht wird nur auf Wunsch von Hand;
+# - Zweitschrift (Aktionstoken, sonn-Kennwort) und Merker neben dem Datenordner entfernen. Den Datenordner selbst
+#   raeumt der Installer ab.
+if [ -n "$2" ] && [ "$2" != "audioserverng" ]; then
+    echo "<INFO> Deinstallation von '$2' - dieses Skript gehoert zu 'audioserverng' und tut nichts."
+    exit 0
+fi
+ARGV3=$3
+ARGV5=$5
+PFOLDER="${ARGV3:-audioserverng}"
+BASE="${ARGV5:-$LBHOMEDIR}"
+case "$PFOLDER" in
+    ''|*/*|*..*|*'*'*|*'?'*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts getan."; exit 1 ;;
+esac
+asn_wurzel_gilt() {   # Fremdpruefung 31.10.2026, T1-2/T2-4a: die Wurzel gilt nur mit config/system/general.json
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ] && [ -f "$1/config/system/general.json" ]
+}
+asn_wurzel_suchen() {
+    asn_v=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    asn_i=0
+    while [ -n "$asn_v" ] && [ "$asn_v" != "/" ] && [ "$asn_i" -lt 8 ]; do
+        if asn_wurzel_gilt "$asn_v"; then
+            echo "$asn_v"
+            return 0
+        fi
+        asn_v=$(dirname "$asn_v")
+        asn_i=$((asn_i + 1))
+    done
+    return 1
+}
+SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+if ! asn_wurzel_gilt "$BASE"; then
+    BASE=$(asn_wurzel_suchen "$SELF") || BASE=""
+fi
+if ! asn_wurzel_gilt "$BASE"; then
+    echo "<WARNING> Es wurde kein LoxBerry-Wurzelverzeichnis gefunden - es wurde NICHTS entfernt und nichts beendet."
+    exit 1
+fi
+TAKT="$BASE/bin/plugins/$PFOLDER/asn_takt.php"
+if command -v php >/dev/null 2>&1 && [ -f "$TAKT" ]; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/bash loxberry -c "$(printf '%q ' env "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PFOLDER" \
+            timeout 60 php "$TAKT" --mqtt-leeren)" < /dev/null 2>&1 || true
+    else
+        env "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PFOLDER" timeout 60 php "$TAKT" --mqtt-leeren < /dev/null 2>&1 || true
+    fi
+else
+    echo "<INFO> PHP oder asn_takt.php fehlt - zurueckbehaltene MQTT-Themen wurden nicht abgeraeumt."
+fi
+BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+BBPHP="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.php"
+BBDIR="$BASE/data/plugins/$PFOLDER/befehle"
+[ -f "$BBSH" ] && timeout 40 bash "$BBSH" stop >/dev/null 2>&1
+bb_rest=0
+for d in /proc/[0-9]*; do
+    mapfile -d '' -t a 2>/dev/null < "$d/cmdline" || continue
+    if [ "${#a[@]}" -eq 2 ] && [ "${a[1]}" = "$BBPHP" ] && [[ "${a[0]}" =~ (^|/)php[0-9.]*$ ]]; then
+        kill -9 "${d#/proc/}" 2>/dev/null
+        bb_rest=$((bb_rest + 1))
+    fi
+done
+bb_abos=0
+for d in /proc/[0-9]*; do
+    read -r c 2>/dev/null < "$d/comm" || continue
+    [ "$c" = "mosquitto_sub" ] || continue
+    mapfile -d '' -t e 2>/dev/null < "$d/environ" || continue
+    for x in "${e[@]}"; do
+        if [ "$x" = "XDG_CONFIG_HOME=$BBDIR/mosquitto" ]; then kill -9 "${d#/proc/}" 2>/dev/null; bb_abos=$((bb_abos + 1)); fi
+    done
+done
+[ "$bb_rest" -gt 0 ] && echo "<WARNING> Befehlsbruecke: $bb_rest Dienst(e) erst mit kill -9 beendet."
+[ "$bb_abos" -gt 0 ] && echo "<WARNING> Befehlsbruecke: $bb_abos mosquitto_sub erst mit kill -9 beendet."
+if [ -d "$BBDIR" ]; then
+    for f in "$BBDIR/mosquitto/mosquitto_sub" "$BBDIR/mosquitto/mosquitto_pub"; do
+        if [ -f "$f" ]; then
+            n=$(stat -c %s "$f" 2>/dev/null || echo 64)
+            head -c "$n" /dev/zero > "$f" 2>/dev/null
+        fi
+    done
+fi
+# Eigener Container und eigenes Netz - nur mit beiden Labels.
+# Fremdpruefung 31.10.2026, T2-4b: jeder docker-Aufruf mit timeout (das Skript laeuft als root; ein haengender
+# Docker-Dienst hielte sonst die Deinstallation an). Dazu die angehaltenen Reste eines gescheiterten Neuanlegens
+# (lb-<ordner>-sonn-alt-<Zeit>, asn_anlegen() seit der Fremdpruefung) - nur mit beiden Labels.
+CNAME="lb-$PFOLDER-sonn"
+NNAME="lb-$PFOLDER-macvlan"
+LNAME="$PFOLDER-sonn"
+if command -v docker >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+    asn_labels() {   # $1 container|network  $2 Name -> "folder name"
+        if [ "$1" = container ]; then
+            timeout 30 docker container inspect --format '{{index .Config.Labels "de.loxberry.plugin.folder"}} {{index .Config.Labels "de.loxberry.plugin.name"}}' "$2" 2>/dev/null
+        else
+            timeout 30 docker network inspect --format '{{index .Labels "de.loxberry.plugin.folder"}} {{index .Labels "de.loxberry.plugin.name"}}' "$2" 2>/dev/null
+        fi
+    }
+    asn_weg() {   # $1 Name eines Containers mit beiden Labels
+        timeout 60 docker stop -t 20 "$1" >/dev/null 2>&1
+        timeout 30 docker rm "$1" >/dev/null 2>&1
+        ! timeout 30 docker container inspect "$1" >/dev/null 2>&1
+    }
+    if ! timeout 10 docker info --format '{{.ServerVersion}}' >/dev/null 2>&1; then
+        echo "<WARNING> Docker antwortet nicht binnen 10 s - der sonn-Container $CNAME wurde NICHT entfernt. Von Hand: docker rm -f $CNAME"
+    else
+        if timeout 30 docker container inspect "$CNAME" >/dev/null 2>&1; then
+            if [ "$(asn_labels container "$CNAME")" = "$PFOLDER $LNAME" ]; then
+                if asn_weg "$CNAME"; then
+                    echo "<OK> sonn-Container $CNAME angehalten und entfernt (Daten unter data/plugins/$PFOLDER.sonn bleiben)."
+                else
+                    echo "<WARNING> sonn-Container $CNAME liess sich nicht entfernen - von Hand: docker rm -f $CNAME"
+                fi
+            else
+                echo "<WARNING> Ein Container $CNAME traegt nicht die Labels dieses Plugins - er bleibt unberuehrt."
+            fi
+        fi
+        for R in $(timeout 30 docker ps -a --filter "label=de.loxberry.plugin.folder=$PFOLDER" --format '{{.Names}}' 2>/dev/null); do
+            case "$R" in
+                "$CNAME"-alt-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+                *) continue ;;
+            esac
+            [ "$(asn_labels container "$R")" = "$PFOLDER $LNAME" ] || continue
+            if asn_weg "$R"; then
+                echo "<OK> Rest eines frueheren Neuanlegens $R entfernt."
+            else
+                echo "<WARNING> Rest eines frueheren Neuanlegens $R liess sich nicht entfernen - von Hand: docker rm -f $R"
+            fi
+        done
+        if timeout 30 docker network inspect "$NNAME" >/dev/null 2>&1; then
+            L=$(asn_labels network "$NNAME")
+            N=$(timeout 30 docker network inspect --format '{{len .Containers}}' "$NNAME" 2>/dev/null)
+            if [ "$L" = "$PFOLDER $LNAME" ] && [ "$N" = "0" ]; then
+                timeout 30 docker network rm "$NNAME" >/dev/null 2>&1 && echo "<OK> Eigenes Netz $NNAME entfernt."
+            else
+                echo "<INFO> Netz $NNAME bleibt (fremd oder noch belegt)."
+            fi
+        fi
+        ASN_BILDER=$(timeout 30 docker image ls --format '{{.Repository}}' 2>/dev/null | grep -c '^ghcr\.io/sonn-audio/core$')
+        echo "<INFO> Abbilder von sonn core bleiben liegen (${ASN_BILDER:-0} Stueck, je rund 330 MB gepackt) - ansehen mit: docker image ls ghcr.io/sonn-audio/core, entfernen mit: docker image rm <Abbild>."
+        echo "<INFO> Mitgenutzte Netze und ein Probe-Container bleiben unberuehrt."
+    fi
+else
+    echo "<INFO> docker (oder timeout) fehlt - kein Container zu entfernen."
+fi
+# Fremdpruefung 31.10.2026, T2-4c: Dateien mit Token oder Kennwort (Zweitschrift, beiseitegelegte Zweitschrift,
+# Nebendatei, unbrauchbare Konfigurationen <ordner>.json.kaputt.<zeit> aus preupgrade.sh) erst mit Nullen
+# ueberschreiben, dann entfernen (Bauart Renault NG 2.1.21). Ein Verweis wird nur als Verweis entfernt.
+SB="$BASE/config/plugins/$PFOLDER.backup.json"
+asn_geheim_weg() {   # $1 Datei
+    if [ -L "$1" ]; then rm -f "$1"; return; fi
+    [ -f "$1" ] || return
+    n=$(stat -c %s "$1" 2>/dev/null || echo 8192)
+    [ "$n" -gt 0 ] 2>/dev/null && head -c "$n" /dev/zero 2>/dev/null | dd of="$1" conv=notrunc >/dev/null 2>&1
+    rm -f "$1"
+}
+for f in "$SB" "$SB.alt" "$SB.neu" "$SB".neu.* "$BASE/config/plugins/$PFOLDER".json.kaputt.*; do
+    asn_geheim_weg "$f"
+done
+rm -f "$BASE/data/plugins/$PFOLDER.container.json" "$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+ASN_REST=""
+for f in "$SB" "$SB.alt" "$BASE/config/plugins/$PFOLDER".json.kaputt.*; do
+    [ -e "$f" ] && ASN_REST="$ASN_REST $f"
+done
+if [ -n "$ASN_REST" ]; then
+    echo "<WARNING> Diese Dateien mit Token oder Kennwort liegen noch da und muessen von Hand geloescht werden:$ASN_REST"
+else
+    echo "<OK> Audioserver NG entfernt. Die Daten von sonn liegen weiter unter data/plugins/$PFOLDER.sonn (gehoert root - von Hand nur mit sudo loeschen, wenn nicht mehr gebraucht)."
+fi
+exit 0
