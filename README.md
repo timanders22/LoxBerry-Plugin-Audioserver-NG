@@ -4,15 +4,25 @@ Eine schlanke Hülle um **sonn core**, die Nachbildung des Loxone Audioservers. 
 Docker-Container auf dem LoxBerry, mit eigener Adresse im Heimnetz und fester MAC. Die Loxone App bedient die Zonen
 **nativ** (Audio-Player-Baustein), die Ausgabe geht je Raum an einen Google-Cast-Lautsprecher.
 
-Version 0.9.0 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.1 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
-**Stand 0.9.0:** erste Fassung, **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
+**Stand 0.9.1:** zweite Fassung (erste: 0.9.0 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
 gemessen. Gerätetest des Plugins am 31.10./01.11.2026 im Haus (Raspberry Pi 4, zwei Google-Cast-Zonen): Einrichten mit einem
 Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte über das MQTT-Gateway V2 und das sichere
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
 
 ---
+
+## Neu in 0.9.1
+
+- **Neues Plugin-Symbol** (Entwurf des Hausherrn): Server mit Notenanzeige und Equalizer unter Funkwellen, im
+  grünen Rund des Hausstandards. Geändert sind `icons/icon.svg` und `icon_64/128/256/512.png`.
+- **Hinweis auf das Musterprojekt berichtigt:** Die Seiten „Audioserver NG“, „Audioserver NG Werte“ und
+  „Audioserver NG Zonen“ liegen seit 31.10.2026 im LoxBerry-Plugins Musterprojekt (siehe „Hilfe und Musterprojekt“);
+  0.9.0 nannte sie noch als „folgt“.
+
+Sonst unverändert gegenüber 0.9.0.
 
 ## Neu in 0.9.0
 
@@ -137,9 +147,10 @@ vorher im Reiter Einstellungen. Ein Musikordner auf USB oder einer Netzfreigabe 
 Der Reiter „Einbindung in Loxone“ zeigt drei Bilder aus dem LoxBerry-Plugins Musterprojekt: die Seiten „Audioserver NG“
 (Dienstwerte, Lebenszeichen, Status, Befehlstasten Neustart und Bibliothek), „Audioserver NG Werte“ (je Zone 8 Werte mit
 Status) und „Audioserver NG Zonen“ (Audio-Player Wohnzimmer und Küche mit Klingel, Wecker und Durchsage).
-Die Hilfe steht im Plugin (Hilfe der LoxBerry-Kopfzeile) und im LoxBerry-Wiki auf der Seite
-[Audioserver NG](https://wiki.loxberry.de/plugins/audioserverng/start). Eine Seite für Audioserver NG im
-[LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt) folgt.
+Die drei Seiten liegen seit 31.10.2026 im
+[LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt) und lassen sich dort
+fertig verdrahtet ansehen und in das eigene Projekt kopieren. Die Hilfe steht im Plugin (Hilfe der LoxBerry-Kopfzeile)
+und im LoxBerry-Wiki auf der Seite [Audioserver NG](https://wiki.loxberry.de/plugins/audioserverng/start).
 
 ## Datenschutz
 Ins Internet geht das Plugin nur auf Knopfdruck und nur zu ghcr.io: beim Laden eines Abbilds (Anlegen, Update) und
