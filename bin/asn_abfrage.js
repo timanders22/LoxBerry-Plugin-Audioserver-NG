@@ -7,6 +7,9 @@
 // der Konten (system.users.length) gelesen.
 // Wege (aus dem Quelltext von sonn core 4.0.0-beta.22 gelesen): GET /api/v1/health, GET /api/v1/zones (ohne
 // Anmeldung), POST /admin/api/auth/login -> token, POST /admin/api/content/library/rescan mit Bearer.
+// 0.9.2 (01.11.2026): {"auftrag":"favoriten","zonen":[..],"eintraege":[{nr,art,name,quelle}]} ersetzt die
+// Zonenfavoriten NUR ueber die dokumentierte oeffentliche API /api/v1 (INTEGRATING.md: GET/POST/PATCH/DELETE
+// /zones/{id}/favorites, GET /browse, GET /playlists) - keine Datei von sonn wird angefasst.
 const fs = require('fs');
 let roh = '';
 let zuviel = false;
@@ -52,13 +55,287 @@ function quelle(q) {
   }
   return dienst;
 }
+// ---------------- 0.9.2: Favoritenliste (Wunsch Hausherr 01.11.2026) ----------------
+// Belege (sonn core 4.0.0-beta.22, Quelltext dist/ im Abbild und INTEGRATING.md im Repository sonn-audio/core):
+//  - Zonenfavoriten = "Meine Favoriten" der Loxone App; der Eingang Fav des Audio Players (audio/<z>/roomfav/play/<n>)
+//    spielt den Favoriten mit der KENNUNG n (zoneHandlers.js audioFavoritePlay -> favoritesManager.getForPlayback:
+//    items.find(i => i.id === n)) - nicht den n-ten Platz.
+//  - POST /api/v1/zones/{z}/favorites vergibt die Kennung als hoechste vorhandene + 1, bei leerer Liste 1
+//    (favoritesManager.add: nextId = max(id) + 1); DELETE entfernt nur diesen Eintrag, die anderen behalten ihre
+//    Kennung (remove: filter + slot neu). Eine Kennung frei setzen kann /api/v1 nicht.
+//  => Stabile Nummern: Liste leeren, dann 1..hoechste Nr der Reihe nach anlegen - fuer eine Luecke einen Platzhalter,
+//     der danach wieder entfernt wird. Jede vergebene Kennung wird gegen die Soll-Nummer geprueft; weicht eine ab
+//     (sonn hat sein Verhalten geaendert), endet der Lauf sofort mit NUMMER.
+//  - Ordner/Datei der Bibliothek: ueber GET /api/v1/browse Ordner fuer Ordner; die Kennung des Treffers geht
+//    unveraendert als uri an POST (INTEGRATING.md: ids "round-trip exactly").
+//    Wiedergabeliste: GET /api/v1/playlists (Name), deren id ist eine Browse-Kennung.
+//  - 0.9.2 Nachzug (Geraetebefund 01.11.2026 03:15): der Musikordner haengt jetzt nur lesend als Unterordner der
+//    Lokalen Bibliothek im Container (data/music/local/<ordner>, ein.ordner, Vorgabe LoxBerry-Musik). Gesucht wird
+//    deshalb NUR dort: Library -> "Local Media" -> "Folders" -> <ordner> -> Pfad. Am Geraet nur lesend gemessen
+//    (01.11.2026, beta.22): Wurzel [Library, Radio]; Library -> [Local Media, alerts, Event_Sounds(, Freigaben)];
+//    Local Media -> [Albums, Artists, Tracks, Folders, Playlists]; die Kennungen sind b1.c.<art>.<b64 Dienst>.<b64
+//    Ordner> mit den Ordnern library-local, library-local-folders, library-local-tracks (localLibraryProvider.js,
+//    browseRef.js). Erkannt wird ueber diese Ordnerkennung, hilfsweise ueber den Namen.
+const FAV_PLATZHALTER = 'http://127.0.0.1:9/audioserverng-platzhalter';
+const FAV_NAME_PLATZHALTER = 'Audioserver NG Platzhalter';
+// 0.9.2 Nachzug: Gesamtfrist fuer den Bibliotheksstand (0 = keine) - der "stand" darf ASN_ABFRAGE_S (20 s) nie reissen.
+let FRIST_ENDE = 0;
+async function api(methode, pfad, koerper, ms) {
+  let grenze = ms || 15000;
+  if (FRIST_ENDE > 0) {
+    const rest = FRIST_ENDE - Date.now();
+    if (rest <= 0) { throw new Error('Frist'); }
+    grenze = Math.min(grenze, rest);
+  }
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), grenze);
+  try {
+    const opt = { method: methode, signal: c.signal };
+    if (koerper !== undefined) {
+      opt.headers = { 'Content-Type': 'application/json' };
+      opt.body = JSON.stringify(koerper);
+    }
+    const r = await fetch('http://127.0.0.1:7090/api/v1' + pfad, opt);
+    let j = null;
+    try { j = await r.json(); } catch (e) { j = null; }
+    return { code: r.status, json: j };
+  } finally {
+    clearTimeout(t);
+  }
+}
+// Alle Eintraege einer Browse-Ebene (seitenweise, hoechstens 5000).
+async function ebene(id) {
+  const aus = [];
+  for (let start = 0; start < 5000; start += 500) {
+    const r = await api('GET', (id === '' ? '/browse' : '/browse/' + encodeURIComponent(id)) + '?start=' + start + '&limit=500');
+    if (r.code !== 200 || !r.json || !Array.isArray(r.json.items)) { return start === 0 ? null : aus; }
+    r.json.items.forEach((x) => { if (x && typeof x.id === 'string') { aus.push(x); } });
+    const total = typeof r.json.total === 'number' ? r.json.total : null;
+    if (r.json.items.length < 500 || (total !== null && aus.length >= total)) { break; }
+  }
+  return aus;
+}
+// Den Namen in einer Ebene finden: zuerst genau, sonn ohne Gross/klein - aber nur, wenn das eindeutig ist.
+function finde(liste, name, pruef) {
+  const k = liste.filter(pruef);
+  const genau = k.filter((x) => x.name === name);
+  if (genau.length) { return genau[0]; }
+  const klein = k.filter((x) => typeof x.name === 'string' && x.name.toLowerCase() === name.toLowerCase());
+  return klein.length === 1 ? klein[0] : null;
+}
+// Der Ordner einer Container-Kennung (b1.c.<art>.<b64 Dienst>.<b64 Ordner>) - oder ''.
+function ordnerVon(id) {
+  const t = String(id || '').split('.');
+  if (t.length !== 5 || t[0] !== 'b1' || t[1] !== 'c') { return ''; }
+  try { return Buffer.from(t[4].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'); } catch (e) { return ''; }
+}
+// Einen Eintrag ueber seine Ordnerkennung finden, hilfsweise ueber den Namen (sonn benennt englisch und fest).
+function eintrag(liste, ordner, name) {
+  if (!liste) { return null; }
+  return liste.find((x) => ordnerVon(x.id) === ordner) || liste.find((x) => x.name === name && x.browsable !== false) || null;
+}
+// Die Lokale Bibliothek: Kennung von "Local Media" (null = nicht gefunden, sonn antwortet aber).
+async function lokaleBibliothek() {
+  const root = await ebene('');
+  if (root === null) { return null; }
+  const lib = root.find((x) => x.service === 'library' && x.browsable !== false);
+  if (!lib) { return null; }
+  return eintrag(await ebene(lib.id), 'library-local', 'Local Media');
+}
+// Der Name des Musikordners in der Lokalen Bibliothek (vom Plugin, nur Buchstaben, Ziffern, . _ -).
+function musikOrdner(ein) {
+  const o = ein && typeof ein.ordner === 'string' ? ein.ordner : '';
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(o) ? o : 'LoxBerry-Musik';
+}
+// Die Ordner-Wurzel fuer liste/datei: Local Media -> Folders -> <ordner>. Liste mit hoechstens einer Kennung.
+async function ordnerWurzeln(ein) {
+  const lm = await lokaleBibliothek();
+  if (!lm) { return []; }
+  const f = eintrag(await ebene(lm.id), 'library-local-folders', 'Folders');
+  if (!f) { return []; }
+  const kinder = await ebene(f.id);
+  const o = kinder ? kinder.find((x) => x.name === musikOrdner(ein) && x.browsable === true) : null;
+  return o ? [o.id] : [];
+}
+// Stand der Bibliothek fuer "So geht es weiter" (4) und den Reiter Test: Titel der Lokalen Bibliothek (Tracks, total)
+// und ob der Ordner <ordner> unter Folders steht. Jeder Fehler -> null (nicht feststellbar), nie ein Abbruch.
+async function bibliothekStand(ein) {
+  const aus = { titel: null, musik_sichtbar: null };
+  FRIST_ENDE = Date.now() + 6000;
+  try {
+    const lm = await lokaleBibliothek();
+    if (!lm) { return aus; }
+    const kat = await ebene(lm.id);
+    const tr = eintrag(kat, 'library-local-tracks', 'Tracks');
+    if (tr) {
+      const r = await api('GET', '/browse/' + encodeURIComponent(tr.id) + '?start=0&limit=1', undefined, 5000);
+      if (r.code === 200 && r.json && Number.isInteger(r.json.total) && r.json.total >= 0) { aus.titel = r.json.total; }
+    }
+    const f = eintrag(kat, 'library-local-folders', 'Folders');
+    if (f) {
+      const kinder = await ebene(f.id);
+      if (kinder) { aus.musik_sichtbar = kinder.some((x) => x.name === musikOrdner(ein) && x.browsable === true); }
+    }
+  } catch (e) {
+    return { titel: null, musik_sichtbar: null };
+  } finally {
+    FRIST_ENDE = 0;
+  }
+  return aus;
+}
+async function bibliothekFinden(wurzeln, pfad, art) {
+  const teile = pfad.split('/').filter((x) => x !== '' && x !== '.');
+  for (const w of wurzeln) {
+    let id = w;
+    let treffer = null;
+    for (let i = 0; i < teile.length; i++) {
+      const liste = await ebene(id);
+      if (!liste) { treffer = null; break; }
+      const letzter = i === teile.length - 1;
+      let x;
+      if (!letzter || art === 'liste') {
+        x = finde(liste, teile[i], (y) => y.browsable === true);
+      } else {
+        // datei: sonn nennt eine Datei mit dem Titel aus den Tags, ohne Tags mit dem Dateinamen ohne Endung.
+        const ohne = teile[i].replace(/\.[A-Za-z0-9]{1,5}$/, '');
+        const t = (y) => y.browsable !== true && y.playable !== false;
+        x = finde(liste, teile[i], t) || finde(liste, ohne, t);
+      }
+      if (!x) { treffer = null; break; }
+      id = x.id;
+      treffer = x;
+    }
+    if (treffer && (art !== 'liste' || treffer.playable !== false)) { return treffer.id; }
+  }
+  return '';
+}
+async function favoriten(ein) {
+  const roh = Array.isArray(ein.eintraege) ? ein.eintraege.slice(0, 99) : [];
+  const soll = new Map();
+  for (const e of roh) {
+    const nr = e && Number.isInteger(e.nr) ? e.nr : 0;
+    if (nr < 1 || nr > 99 || soll.has(nr) || !['radio', 'liste', 'datei'].includes(e.art)
+        || typeof e.name !== 'string' || typeof e.quelle !== 'string' || e.quelle === '') {
+      return aus({ ok: false, grund: 'FAV_EINGABE', favoriten: true });
+    }
+    soll.set(nr, { nr: nr, art: e.art, name: e.name.slice(0, 80) || e.quelle.slice(0, 80), quelle: e.quelle.slice(0, 400) });
+  }
+  if (soll.size === 0) { return aus({ ok: false, grund: 'FAV_LEER', favoriten: true }); }
+  let z;
+  try { z = await api('GET', '/zones'); } catch (e) { return aus({ ok: false, grund: 'SONN_ANTWORTET_NICHT', favoriten: true }); }
+  const da = (z.json && Array.isArray(z.json.zones) ? z.json.zones : []).map((x) => Number(x && x.id))
+    .filter((x) => Number.isInteger(x) && x >= 1 && x <= 24);
+  let zonen = Array.isArray(ein.zonen) ? ein.zonen.filter((x) => Number.isInteger(x)) : [];
+  if (zonen.length === 0) { zonen = da.slice(); }
+  if (zonen.length === 0) { return aus({ ok: false, grund: 'FAV_KEINE_ZONE', favoriten: true }); }
+  const fehlt = zonen.filter((x) => !da.includes(x));
+  if (fehlt.length) { return aus({ ok: false, grund: 'FAV_ZONE_FEHLT|' + fehlt.join(','), favoriten: true }); }
+  // 1. Alles aufloesen, BEVOR etwas geaendert wird.
+  const uebersprungen = [];
+  const uri = new Map();
+  let wurzeln = null;
+  let listen = null;
+  try {
+    for (const e of soll.values()) {
+      if (/^https?:\/\//i.test(e.quelle)) {
+        if (e.art === 'liste') { uebersprungen.push({ nr: e.nr, grund: 'FAV_ART' }); continue; }
+        uri.set(e.nr, e.quelle);
+        continue;
+      }
+      if (e.art === 'radio') { uebersprungen.push({ nr: e.nr, grund: 'FAV_ART' }); continue; }
+      if (wurzeln === null) { wurzeln = await ordnerWurzeln(ein); }
+      let id = wurzeln.length ? await bibliothekFinden(wurzeln, e.quelle, e.art) : '';
+      if (id === '' && e.art === 'liste' && e.quelle.indexOf('/') < 0) {
+        if (listen === null) {
+          const p = await api('GET', '/playlists?limit=500');
+          listen = p.code === 200 && p.json && Array.isArray(p.json.items) ? p.json.items : [];
+        }
+        const pl = finde(listen, e.quelle, (y) => y && typeof y.id === 'string');
+        id = pl ? pl.id : '';
+      }
+      if (id === '') { uebersprungen.push({ nr: e.nr, grund: wurzeln.length ? 'FAV_NICHT_GEFUNDEN' : 'FAV_KEINE_BIBLIOTHEK' }); continue; }
+      uri.set(e.nr, id);
+    }
+  } catch (e) {
+    return aus({ ok: false, grund: 'SONN_ANTWORTET_NICHT', favoriten: true });
+  }
+  if (uri.size === 0) { return aus({ ok: false, grund: 'FAV_NICHTS', uebersprungen: uebersprungen, favoriten: true }); }
+  const hoechste = Math.max(...uri.keys());
+  const ergebnis = [];
+  // 2. Je Zone: alte Liste merken, leeren, der Reihe nach anlegen, Platzhalter entfernen, nachlesen.
+  for (const zone of zonen) {
+    const zs = { zone: zone, vorher: [], nachher: [], gesetzt: 0 };
+    ergebnis.push(zs);
+    try {
+      const v = await api('GET', '/zones/' + zone + '/favorites?limit=500');
+      if (v.code !== 200 || !v.json || !Array.isArray(v.json.items)) {
+        return aus({ ok: false, grund: 'FAV_LESEN|' + zone + '|' + v.code, zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+      }
+      zs.vorher = v.json.items.map((x) => ({ id: x.id, name: text(x.name, 120), source: text(x.source, 400) }));
+      for (const x of v.json.items) {
+        const d = await api('DELETE', '/zones/' + zone + '/favorites', { id: x.id });
+        if (d.code < 200 || d.code > 299) {
+          return aus({ ok: false, grund: 'FAV_LEEREN|' + zone + '|' + d.code, zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+        }
+      }
+      const l = await api('GET', '/zones/' + zone + '/favorites?limit=500');
+      if (l.code !== 200 || !l.json || !Array.isArray(l.json.items) || l.json.items.length !== 0) {
+        return aus({ ok: false, grund: 'FAV_LEEREN|' + zone + '|' + l.code, zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+      }
+      const platz = [];
+      for (let n = 1; n <= hoechste; n++) {
+        const echt = uri.has(n);
+        const name = echt ? soll.get(n).name : FAV_NAME_PLATZHALTER;
+        const a = await api('POST', '/zones/' + zone + '/favorites', { uri: echt ? uri.get(n) : FAV_PLATZHALTER, name: name }, 30000);
+        const id = a.json && Number.isInteger(a.json.id) ? a.json.id : null;
+        if (a.code < 200 || a.code > 299 || id === null) {
+          return aus({ ok: false, grund: 'FAV_ANLEGEN|' + zone + '|' + n + '|' + a.code, zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+        }
+        if (id !== n) {
+          return aus({ ok: false, grund: 'FAV_NUMMER|' + zone + '|' + n + '|' + id, zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+        }
+        if (!echt) { platz.push(id); continue; }
+        zs.gesetzt++;
+        if (a.json.name !== name) {
+          // sonn uebernimmt beim Anlegen den Titel aus den Metadaten (z. B. TuneIn) - den eigenen Namen setzen.
+          const p = await api('PATCH', '/zones/' + zone + '/favorites', { id: id, name: name });
+          if (p.code < 200 || p.code > 299) {
+            return aus({ ok: false, grund: 'FAV_NAME|' + zone + '|' + n + '|' + p.code, zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+          }
+        }
+      }
+      for (const id of platz) {
+        const d = await api('DELETE', '/zones/' + zone + '/favorites', { id: id });
+        if (d.code < 200 || d.code > 299) {
+          return aus({ ok: false, grund: 'FAV_PLATZHALTER|' + zone + '|' + id + '|' + d.code, zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+        }
+      }
+      const e = await api('GET', '/zones/' + zone + '/favorites?limit=500');
+      const ist = e.code === 200 && e.json && Array.isArray(e.json.items) ? e.json.items : null;
+      if (ist === null) {
+        return aus({ ok: false, grund: 'FAV_LESEN|' + zone + '|' + e.code, zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+      }
+      zs.nachher = ist.map((x) => ({ id: x.id, name: text(x.name, 120) }));
+      const passt = ist.length === uri.size && ist.every((x) => uri.has(x.id) && x.name === soll.get(x.id).name);
+      if (!passt) {
+        return aus({ ok: false, grund: 'FAV_ABWEICHUNG|' + zone, zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+      }
+    } catch (e) {
+      return aus({ ok: false, grund: 'SONN_ANTWORTET_NICHT', zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+    }
+  }
+  return aus({ ok: true, grund: '', zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
+}
 async function haupt() {
   // Fremdpruefung 31.10.2026, T3-4: eine abgeschnittene, leere oder unlesbare Eingabe oder ein unbekannter Auftrag ist
   // ein Fehler - bis dahin fiel sie auf {} zurueck, und ein kaputter "rescan" meldete als "stand" ok:true.
   let ein = null;
   try { ein = zuviel ? null : JSON.parse(roh); } catch (e) { ein = null; }
-  if (!ein || typeof ein !== 'object' || (ein.auftrag !== 'stand' && ein.auftrag !== 'rescan')) {
+  if (!ein || typeof ein !== 'object' || (ein.auftrag !== 'stand' && ein.auftrag !== 'rescan' && ein.auftrag !== 'favoriten')) {
     return aus({ ok: false, grund: 'SONN_FEHLER', text: 'Eingabe unlesbar' });
+  }
+  if (ein.auftrag === 'favoriten') {
+    return favoriten(ein);
   }
   if (ein.auftrag === 'rescan') {
     let a;
@@ -115,11 +392,13 @@ async function haupt() {
       name: text(x.output.device && x.output.device.name) || (ausgangName[Number(x.id)] || ''),
       connected: (x.output.device && typeof x.output.device.connected === 'boolean') ? x.output.device.connected : null } } : undefined),
     error: !!(x && typeof x.error === 'string' && x.error !== '') }));
+  const bib = await bibliothekStand(ein);   // 0.9.2 Nachzug: Titel und Musikordner der Lokalen Bibliothek (null = unklar)
   aus({
     ok: true, grund: '',
     health: { code: h.code, status: text(hj.status, 20), version: text(hj.version, 40), checks: checks },
     zonen_code: z.code, zonen: zonen,
     mac_id: text(s.macId, 20), ip: text(s.ip, 20), gekoppelt: s.paired === true && s.loxoneEnabled !== false,
     loxone_ein: s.loxoneEnabled === true, mqtt_ein: m.enabled === true, konten: k,
+    titel: bib.titel, musik_sichtbar: bib.musik_sichtbar,
   });
 }

@@ -48,6 +48,8 @@ define('ASN_PROBE_LABEL', 'de.loxberry.probe');
 define('ASN_PROBE_WERT', 'audio-stufe2');
 define('ASN_VOLL_S', 1800);                   // voller MQTT-Satz alle 30 min, sonst nur Aenderungen
 define('ASN_ABFRAGE_S', 20);                  // Obergrenze einer Abfrage per docker exec
+define('ASN_FAVORITEN_S', 240);              // 0.9.2: Obergrenze fuer das Uebernehmen der Favoriten (alle Zonen)
+define('ASN_FAV_MAX', 99);                   // 0.9.2: Favoriten-Nummern 1 bis 99 (= Eingang Fav in Loxone)
 define('ASN_ZIEHEN_S', 900);                  // Obergrenze fuer docker pull (rund 330 MB gepackt)
 define('ASN_KOPIE_S', 600);                   // Obergrenze fuer das Kopieren eines Datenordners
 define('ASN_TAKT_GRENZE', 180);               // Takt-Lebenszeichen gilt bis 3 min
@@ -56,6 +58,15 @@ define('ASN_LOG_MAX', 262144);
 define('ASN_LOG_REST', 300);
 define('ASN_TOKEN_ZEICHEN', 'abcdefghijkmnpqrstuvwxyz23456789');
 define('ASN_TOKEN_LAENGE', 24);
+// 0.9.2 Nachzug Musikordner (Geraetebefund 01.11.2026 03:15): sonn core 4.0.0-beta.22 kennt keinen frei waehlbaren
+// Bibliotheksordner. Gescannt werden nur data/music/local (Lokale Bibliothek) und data/music/nas/<id> (Freigaben, die
+// sonn selbst einhaengt) - localLibraryProvider.js rescan()/scanStorage(). Ein Ordner unter /musik war deshalb nie
+// sichtbar. Der Musikordner kommt jetzt nur lesend als Unterordner der Lokalen Bibliothek in den Container. Der Name ist
+// fest: sonn legt hochgeladene Titel als <Kuenstler>/<Album> an (resolveTagBasedSubdir, toSafeFolderName); ein Kuenstler
+// "LoxBerry-Musik" ist nicht zu erwarten, und vor dem Anlegen prueft asn_musik_punkt_pruefen(), dass dort nichts liegt.
+define('ASN_MUSIK_NAME', 'LoxBerry-Musik');
+define('ASN_MUSIK_ZIEL', '/app/data/music/local/' . ASN_MUSIK_NAME);
+define('ASN_MUSIK_ALT', '/musik');            // Einhaengepunkt bis 0.9.2 (Probe, aeltere eigene Container) - nur noch lesen
 
 /* ==================================================================
  * Fassung, Wurzel, Pfade (Bauart Xiaomi Licht 0.9.3 xl_paths())
@@ -279,7 +290,7 @@ function asn_vorgaben()
         'hostname'         => 'sonn',
         'speicher_mb'      => 1024,       // --memory (Frage F8)
         'cpus'             => 2,          // --cpus
-        'musik_pfad'       => '',         // Musikordner, nur lesend als /musik
+        'musik_pfad'       => '',         // Musikordner, nur lesend als ASN_MUSIK_ZIEL (Lokale Bibliothek von sonn)
         'abbild'           => '',         // Digest nach einem Update mit Ja ('' = Vorgabe aus bin/asn_abbild.json)
         'abbild_vorher'    => '',         // Digest vor dem letzten Update (Rueckweg)
         'datenordner'      => '',         // Unterordner von <ordner>.sonn/ mit den Daten des laufenden Abbilds
@@ -293,13 +304,15 @@ function asn_vorgaben()
         'sonn_benutzer'    => '',         // sonn-Konto nur fuer "Bibliothek einlesen" (Frage F5)
         'sonn_kennwort'    => '',
         'zonen_hoechste'   => 0,          // hoechste je gemeldete Zonennummer (Abraeumen bei der Deinstallation)
+        'favoriten'        => '',         // 0.9.2: je Zeile "Nr = radio|liste|datei | Name | Quelle" (ab Werk leer)
+        'favoriten_zonen'  => '',         // 0.9.2: Zonen fuer die Favoriten, z. B. "1,2"; leer = alle Zonen von sonn
     );
 }
 
 /** Schluessel, die in einer Sicherung fehlen duerfen (dann gilt der geltende Wert). */
 function asn_spaet_schluessel()
 {
-    return array('befehle_mqtt_ein', 'steuerung_ein', 'endpunkt_ein', 'zonen_hoechste');
+    return array('befehle_mqtt_ein', 'steuerung_ein', 'endpunkt_ein', 'zonen_hoechste', 'favoriten', 'favoriten_zonen');
 }
 
 function asn_json_lesen($pfad)
@@ -1347,6 +1360,9 @@ function asn_soll(array $cfg)
         'datenname' => $daten,
         'daten'     => asn_datenordner_pfad($daten),
         'musik'     => trim((string) $cfg['musik_pfad']),
+        // 0.9.2 Nachzug: Teil des Soll-Hashes - ein Container mit dem alten Einhaengepunkt /musik weicht damit ab und
+        // wird mit "Container anlegen oder angleichen" neu angelegt (Datenordner bleibt, keine Kopie).
+        'musik_ziel' => ASN_MUSIK_ZIEL,
     );
     $def['hash'] = substr(sha1((string) json_encode($def)), 0, 16);
     return array(true, '', $def);
@@ -1366,11 +1382,63 @@ function asn_create_args(array $def)
         '--log-opt', 'max-size=5m', '--log-opt', 'max-file=2',
         '-v', $def['daten'] . ':/app/data');
     if ($def['musik'] !== '') {
+        // 0.9.2 Nachzug: verschachtelt UNTER dem Datenordner (/app/data ist selbst ein Bind) - Docker haengt nach der
+        // Tiefe des Ziels ein (erst /app/data, dann dieser), und den leeren Einhaengepunkt legt es im Datenordner auf dem
+        // LoxBerry an. Der Bind lebt nur im Namensraum des Containers (/app/data rprivate, Musik rslave = nur vom
+        // LoxBerry herein): auf dem LoxBerry und in jedem Hilfscontainer der Datenkopie ist der Ordner leer.
         $a[] = '--mount';
-        $a[] = 'type=bind,source=' . $def['musik'] . ',target=/musik,readonly,bind-propagation=rslave';
+        $a[] = 'type=bind,source=' . $def['musik'] . ',target=' . ASN_MUSIK_ZIEL . ',readonly,bind-propagation=rslave';
     }
     $a[] = $def['bild'];
     return $a;
+}
+
+/** Der Einhaengepunkt des Musikordners im Datenordner AUF DEM LOXBERRY (dort immer leer, s. asn_create_args()). */
+function asn_musik_punkt($daten)
+{
+    return rtrim((string) $daten, '/') . '/music/local/' . ASN_MUSIK_NAME;
+}
+
+/**
+ * Der Einhaengepunkt im Datenordner muss fehlen oder ein LEERER, echter Ordner auf demselben Dateisystem wie
+ * music/local sein. Sonst ('' = gut): MUSIK_PUNKT_BELEGT|name (dort liegen Dateien - etwa ein Upload in sonn, den der
+ * Musikordner verdecken wuerde, oder ein Rest), MUSIK_PUNKT_FREMD|name (Verweis, Datei oder ein auf dem LoxBerry
+ * eingehaengtes Dateisystem). Gilt vor dem Anlegen und vor/nach jeder Datenkopie: so kopiert keine Kopie je Musik mit.
+ */
+function asn_musik_punkt_pruefen($daten)
+{
+    $pkt = asn_musik_punkt($daten);
+    if (!@file_exists($pkt) && !@is_link($pkt)) {
+        return '';
+    }
+    if (@is_link($pkt) || !@is_dir($pkt)) {
+        return 'MUSIK_PUNKT_FREMD|' . ASN_MUSIK_NAME;
+    }
+    $s1 = @stat($pkt);
+    $s2 = @stat(dirname($pkt));
+    if (!is_array($s1) || !is_array($s2) || $s1['dev'] !== $s2['dev']) {
+        return 'MUSIK_PUNKT_FREMD|' . ASN_MUSIK_NAME;
+    }
+    $inhalt = @scandir($pkt);
+    if (!is_array($inhalt)) {
+        return 'MUSIK_PUNKT_FREMD|' . ASN_MUSIK_NAME;
+    }
+    if (count(array_diff($inhalt, array('.', '..'))) > 0) {
+        return 'MUSIK_PUNKT_BELEGT|' . ASN_MUSIK_NAME;
+    }
+    return '';
+}
+
+/** Der Musik-Bind eines Containers aus asn_container()['mounts']: zuerst der neue Ort, sonst der alte /musik. null = keiner. */
+function asn_musik_mount(array $mounts)
+{
+    if (isset($mounts[ASN_MUSIK_ZIEL])) {
+        return $mounts[ASN_MUSIK_ZIEL] + array('ziel' => ASN_MUSIK_ZIEL);
+    }
+    if (isset($mounts[ASN_MUSIK_ALT])) {
+        return $mounts[ASN_MUSIK_ALT] + array('ziel' => ASN_MUSIK_ALT);
+    }
+    return null;
 }
 
 /* ==================================================================
@@ -1392,7 +1460,7 @@ function asn_sonn_fragen($container, $auftrag, array $cfg = array())
     if ($skript === '') {
         return array(false, 'ABFRAGE_FEHLT', null);
     }
-    $ein = array('auftrag' => $auftrag);
+    $ein = array('auftrag' => $auftrag, 'ordner' => ASN_MUSIK_NAME);   // 0.9.2 Nachzug: Ordner in der Lokalen Bibliothek
     if ($auftrag === 'rescan') {
         if ((string) $cfg['sonn_benutzer'] === '' || (string) $cfg['sonn_kennwort'] === '') {
             return array(false, 'KONTO_FEHLT', null);
@@ -1400,15 +1468,32 @@ function asn_sonn_fragen($container, $auftrag, array $cfg = array())
         $ein['benutzer'] = (string) $cfg['sonn_benutzer'];
         $ein['kennwort'] = (string) $cfg['sonn_kennwort'];
     }
+    $frist = ASN_ABFRAGE_S;
+    if ($auftrag === 'favoriten') {
+        list($liste, $f1) = asn_favoriten_lesen(isset($cfg['favoriten']) ? $cfg['favoriten'] : '');
+        list($zonen, $f2) = asn_favoriten_zonen_lesen(isset($cfg['favoriten_zonen']) ? $cfg['favoriten_zonen'] : '');
+        if ($f1 || $f2) {
+            return array(false, 'FAV_EINGABE', null);
+        }
+        if (!$liste) {
+            return array(false, 'FAV_LEER', null);
+        }
+        $ein['zonen'] = $zonen;
+        $ein['eintraege'] = array();
+        foreach ($liste as $e) {
+            $ein['eintraege'][] = array('nr' => $e['nr'], 'art' => $e['art'], 'name' => $e['name'], 'quelle' => $e['quelle']);
+        }
+        $frist = ASN_FAVORITEN_S;
+    }
     // Fremdpruefung 31.10.2026, T3-4: laesst sich die Eingabe nicht als JSON schreiben (ungueltiges UTF-8 im Kennwort),
     // geht gar nichts in den Container - bisher kam dort "" an, und die Abfrage lief als "stand" mit ok:true.
     $ein_json = json_encode($ein);
     if (!is_string($ein_json)) {
         return array(false, 'SONN_FEHLER', array('text' => 'Eingabe nicht als JSON darstellbar'));
     }
-    list($rc, $out, $err) = asn_docker(array('exec', '-i', $container, 'node', '-e', $skript), ASN_ABFRAGE_S, $ein_json);
+    list($rc, $out, $err) = asn_docker(array('exec', '-i', $container, 'node', '-e', $skript), $frist, $ein_json);
     if ($rc === 124) {
-        return array(false, 'ABFRAGE_ZEIT|' . ASN_ABFRAGE_S, null);
+        return array(false, 'ABFRAGE_ZEIT|' . $frist, null);
     }
     $z = array_values(array_filter(array_map('trim', preg_split('/\r?\n/', (string) $out)), 'strlen'));
     $d = $z ? json_decode($z[count($z) - 1], true) : null;
@@ -1417,6 +1502,10 @@ function asn_sonn_fragen($container, $auftrag, array $cfg = array())
     }
     if ($auftrag === 'rescan' && !empty($d['ok']) && !isset($d['code'])) {
         // T3-4: ein "ok" ohne HTTP-Code ist keine Antwort auf das Einlesen (sondern ein Stand) - nicht als gelungen werten.
+        return array(false, 'SONN_FEHLER', array('text' => 'Antwort passt nicht zum Auftrag'));
+    }
+    if ($auftrag === 'favoriten' && empty($d['favoriten'])) {
+        // 0.9.2: eine Antwort ohne das Merkmal "favoriten" stammt nicht aus dem Favoriten-Zweig (alte Abfrage).
         return array(false, 'SONN_FEHLER', array('text' => 'Antwort passt nicht zum Auftrag'));
     }
     return array(!empty($d['ok']), isset($d['grund']) && is_string($d['grund']) ? $d['grund'] : '', $d);
@@ -2363,6 +2452,10 @@ function asn_takt()
                             'mqtt_ein' => isset($d['mqtt_ein']) ? ($d['mqtt_ein'] ? 1 : 0) : -1,
                             'loxone_ein' => isset($d['loxone_ein']) ? ($d['loxone_ein'] ? 1 : 0) : -1,
                             'konten' => isset($d['konten']) && is_int($d['konten']) && $d['konten'] >= 0 ? $d['konten'] : -1,
+                            // 0.9.2 Nachzug: Titel der Lokalen Bibliothek (/api/v1/browse ... Tracks, "total") und ob
+                            // der Ordner ASN_MUSIK_NAME dort sichtbar ist; -1 = nicht feststellbar.
+                            'titel' => isset($d['titel']) && is_int($d['titel']) && $d['titel'] >= 0 ? $d['titel'] : -1,
+                            'musik_sichtbar' => isset($d['musik_sichtbar']) && is_bool($d['musik_sichtbar']) ? ($d['musik_sichtbar'] ? 1 : 0) : -1,
                         );
                         $z['zonen'] = $zon;
                         $z['ok'] = $lage['gesund'] >= 1 ? 1 : 0;
@@ -2440,7 +2533,8 @@ function asn_log_wenn_neu($schluessel, $lage, $text)
 
 function asn_vorgaenge()
 {
-    return array('anlegen', 'starten', 'stoppen', 'neustart', 'wechsel', 'update', 'rueckweg', 'probe_entfernen', 'bibliothek');
+    return array('anlegen', 'starten', 'stoppen', 'neustart', 'wechsel', 'update', 'rueckweg', 'probe_entfernen', 'bibliothek',
+                 'favoriten');
 }
 
 function asn_vorgang()
@@ -2544,6 +2638,9 @@ function asn_vorgang_ausfuehren($auftrag)
             break;
         case 'bibliothek':
             $r = asn_bibliothek();
+            break;
+        case 'favoriten':
+            $r = asn_favoriten_uebernehmen();
             break;
         default:
             $r = array(false, 'VORGANG', '', '');
@@ -2725,6 +2822,15 @@ function asn_daten_kopieren($von, $nach, $bild)
     if (!is_dir($von)) {
         return array(false, 'KOPIE_QUELLE|' . basename($von), '');
     }
+    // 0.9.2 Nachzug: die Kopie laeuft im Hilfscontainer, der NUR die beiden Datenordner sieht (kein Musik-Bind; der lebt
+    // allein im Namensraum des sonn-Containers). Der Einhaengepunkt wird als leerer Ordner mitkopiert - Docker legt ihn
+    // beim Anlegen ohnehin an. Zusaetzlich: ist er in der Quelle nicht leer oder ein anderes Dateisystem, wird NICHT
+    // kopiert und der Zielordner gar nicht erst angelegt (sonst kaeme fremder Inhalt mit, und der Musikordner wuerde
+    // ihn spaeter verdecken).
+    $gp = asn_musik_punkt_pruefen($von);
+    if ($gp !== '') {
+        return array(false, 'KOPIE_MUSIK|' . basename($von) . '/music/local/' . ASN_MUSIK_NAME, '');
+    }
     if (!is_dir($nach) && !@mkdir($nach, 0750, true)) {
         return array(false, 'SCHREIBEN', $nach);
     }
@@ -2742,7 +2848,18 @@ function asn_daten_kopieren($von, $nach, $bild)
     if (!is_array($nachher) || count(array_diff($nachher, array('.', '..'))) === 0) {
         return array(false, 'KOPIE_LEER', '');
     }
+    $gn = asn_musik_punkt_pruefen($nach);
+    if ($gn !== '') {
+        // "KOPIE|"-Gruppe: die Aufrufer stellen die neue Ablage beiseite (asn_kopie_halb()).
+        return array(false, 'KOPIE_MUSIK_NACHHER|' . basename($nach) . '/music/local/' . ASN_MUSIK_NAME, '');
+    }
     return array(true, '', '');
+}
+
+/** Hat eine gescheiterte Kopie schon in den Zielordner geschrieben (dann kommt er beiseite)? */
+function asn_kopie_halb($g)
+{
+    return strpos((string) $g, 'KOPIE|') === 0 || strpos((string) $g, 'KOPIE_MUSIK_NACHHER|') === 0;
 }
 
 /** Abbild vorhanden? Sonst ziehen (per Digest). Rueckgabe array(ok, grund, text). */
@@ -2889,7 +3006,7 @@ function asn_anlegen($schritt, $wechsel)
         }
         list($ok, $g, $t) = asn_daten_kopieren($quelle, $def['daten'], $def['bild']);
         if (!$ok) {
-            if (strpos($g, 'KOPIE|') === 0) {
+            if (asn_kopie_halb($g)) {
                 asn_daten_beiseite($def['daten']);   // halb kopiert: beiseite, ein neuer Versuch ist frei
             }
             return array(false, $g, $t, '');
@@ -2901,7 +3018,13 @@ function asn_anlegen($schritt, $wechsel)
     }
     if ($def['musik'] !== '') {
         $gm = asn_musik_pruefen($def['musik'], true);
+        if ($gm === '') {
+            $gm = asn_musik_punkt_pruefen($def['daten']);   // 0.9.2 Nachzug: nichts verdecken
+        }
         if ($gm !== '') {
+            if ($kopiert !== '') {
+                asn_daten_beiseite($kopiert);
+            }
             return array(false, $gm, '', '');
         }
     }
@@ -2989,7 +3112,7 @@ function asn_container_befund(array $k, array $def)
     if ($k['bild'] !== $def['bild']) {
         return 'ABBILD_ANDERS';
     }
-    if ($def['musik'] !== '' && (!isset($k['mounts']['/musik']) || $k['mounts']['/musik']['rw'])) {
+    if ($def['musik'] !== '' && (!isset($k['mounts'][ASN_MUSIK_ZIEL]) || $k['mounts'][ASN_MUSIK_ZIEL]['rw'])) {
         return 'MUSIK_SCHREIBBAR';
     }
     return '';
@@ -3059,7 +3182,7 @@ function asn_update($schritt)
     $neu_name = 'daten_' . asn_kurzdigest($neu);
     list($ok, $g, $t) = asn_daten_kopieren(asn_datenordner_pfad($alt_name), asn_datenordner_pfad($neu_name), asn_abbild_ref($neu));
     if (!$ok) {
-        if (strpos($g, 'KOPIE|') === 0) {
+        if (asn_kopie_halb($g)) {
             asn_daten_beiseite(asn_datenordner_pfad($neu_name));   // halb kopiert: beiseite, ein neuer Versuch ist frei
         }
         return array(false, $g, $t, '');
@@ -3160,6 +3283,238 @@ function asn_bibliothek()
         return array(false, $g !== '' ? $g : 'ABFRAGE_ANTWORT|0', is_array($d) && isset($d['text']) ? (string) $d['text'] : '', '');
     }
     return array(true, '', '', 'BIBLIOTHEK');
+}
+
+/* ==================================================================
+ * Favoriten (0.9.2, Wunsch Hausherr 01.11.2026): eine Liste "Nr = Art | Name | Quelle" wie Chromecast4lox 1.3.25
+ * (Reiter Audio, Quellen). Die Nummer ist die Kennung des Zonenfavoriten in sonn = Eingang Fav des Audio Players in
+ * Loxone (playZoneFav/<Nr>). Uebernommen wird nur auf Knopfdruck mit Ja-Haken im Hintergrundvorgang "favoriten",
+ * ausschliesslich ueber die oeffentliche API /api/v1 von sonn (bin/asn_abfrage.js) - keine Datei von sonn.
+ * ================================================================== */
+
+/**
+ * Ein Pfad im Musikordner: relativ, "/" getrennt, ohne ".."; ein vorangestelltes "/musik/" (Schreibweise bis 0.9.2) oder
+ * der Ort im Container (ASN_MUSIK_ZIEL/) wird abgenommen. null = abgewiesen.
+ */
+function asn_fav_pfad($s)
+{
+    $t = str_replace('\\', '/', trim((string) $s));
+    foreach (array(ASN_MUSIK_ALT . '/', ASN_MUSIK_ZIEL . '/') as $vor) {
+        if (strpos($t, $vor) === 0) {
+            $t = substr($t, strlen($vor));
+            break;
+        }
+    }
+    if ($t === '' || $t[0] === '/' || preg_match('/[\x00-\x1F\x7F]/', $t) || preg_match('/^[A-Za-z]:/', $t)
+        || preg_match('#^[a-z][a-z0-9+.\-]*://#i', $t) || strlen($t) > 400) {
+        return null;
+    }
+    $teile = array();
+    foreach (explode('/', $t) as $x) {
+        if ($x === '' || $x === '.') {
+            continue;
+        }
+        if ($x === '..') {
+            return null;
+        }
+        $teile[] = $x;
+    }
+    return $teile ? implode('/', $teile) : null;
+}
+
+/** Eine Stream-Adresse: http oder https, ohne Leer- und Steuerzeichen, hoechstens 400 Zeichen. */
+function asn_fav_adresse($s)
+{
+    $s = (string) $s;
+    return strlen($s) <= 400 && preg_match('#^https?://[^\s/?\#]+[^\s]*\z#i', $s) === 1 && !preg_match('/[\x00-\x1F\x7F]/', $s);
+}
+
+/**
+ * Die Favoritenliste lesen: je Zeile "Nr = Art | Name | Quelle"; leere Zeilen und Zeilen mit # zaehlen nicht.
+ * Art radio (http/https), liste (Ordner im Musikordner oder eine Wiedergabeliste von sonn) oder datei (Datei im
+ * Musikordner oder http/https). Rueckgabe array(Liste nr => array(nr, art, name, quelle), Beanstandungen[]).
+ */
+function asn_favoriten_lesen($text)
+{
+    $aus = array();
+    $fehler = array();
+    foreach (preg_split('/[\r\n]+/', (string) $text) as $z) {
+        $z = trim($z);
+        if ($z === '' || $z[0] === '#') {
+            continue;
+        }
+        $teile = array();
+        $nr = null;
+        if (strpos($z, '=') !== false) {
+            list($nr_t, $rest) = explode('=', $z, 2);
+            $nr_t = trim($nr_t);
+            if (preg_match('/^[0-9]{1,2}\z/', $nr_t) && (int) $nr_t >= 1 && (int) $nr_t <= ASN_FAV_MAX) {
+                $nr = (int) $nr_t;
+            }
+            $teile = array_map('trim', explode('|', $rest, 3));
+        }
+        if ($nr === null || count($teile) !== 3 || !in_array(strtolower($teile[0]), array('radio', 'liste', 'datei'), true)
+            || $teile[2] === '') {
+            $fehler[] = sprintf(asn_t('FAV.F_FORM'), asn_kurztext($z, 60), ASN_FAV_MAX);
+            continue;
+        }
+        $art = strtolower($teile[0]);
+        $name = $teile[1];
+        $q = $teile[2];
+        if (preg_match('/[\x00-\x1F\x7F]/', $name) || preg_match_all('/./us', $name) > 80
+            || preg_match('//u', $name . $q) !== 1) {
+            $fehler[] = sprintf(asn_t('FAV.F_NAME'), $nr);
+            continue;
+        }
+        $web = preg_match('#^https?://#i', $q) === 1;
+        if ($art === 'radio') {
+            $ok = asn_fav_adresse($q);
+        } elseif ($art === 'liste') {
+            $ok = !$web && asn_fav_pfad($q) !== null;
+            $q = $ok ? asn_fav_pfad($q) : $q;
+        } else {
+            $ok = $web ? asn_fav_adresse($q) : asn_fav_pfad($q) !== null;
+            $q = (!$web && $ok) ? asn_fav_pfad($q) : $q;
+        }
+        if (!$ok) {
+            $fehler[] = sprintf(asn_t('FAV.F_QUELLE'), $nr);
+            continue;
+        }
+        if (isset($aus[$nr])) {
+            $fehler[] = sprintf(asn_t('FAV.F_DOPPELT'), $nr);
+            continue;
+        }
+        $aus[$nr] = array('nr' => $nr, 'art' => $art, 'name' => $name !== '' ? $name : asn_kurztext($q, 80), 'quelle' => $q);
+    }
+    ksort($aus);
+    return array($aus, $fehler);
+}
+
+/** Die Zonen fuer die Favoriten: "" = alle Zonen von sonn, sonst Nummern 1 bis 24 (Komma, Strichpunkt oder Leerzeichen). */
+function asn_favoriten_zonen_lesen($text)
+{
+    $t = trim((string) $text);
+    if ($t === '') {
+        return array(array(), array());
+    }
+    $aus = array();
+    foreach (preg_split('/[\s,;]+/', $t) as $x) {
+        if ($x === '') {
+            continue;
+        }
+        if (!preg_match('/^[0-9]{1,2}\z/', $x) || (int) $x < 1 || (int) $x > ASN_ZONEN_MAX) {
+            return array(array(), array(sprintf(asn_t('FAV.F_ZONEN'), ASN_ZONEN_MAX)));
+        }
+        if (!in_array((int) $x, $aus, true)) {
+            $aus[] = (int) $x;
+        }
+    }
+    sort($aus);
+    return array($aus, array());
+}
+
+/** Die Liste als Text (gespeicherte Form: eine Zeile je Eintrag, sortiert). */
+function asn_favoriten_text(array $liste)
+{
+    $z = array();
+    foreach ($liste as $e) {
+        $z[] = $e['nr'] . ' = ' . $e['art'] . ' | ' . $e['name'] . ' | ' . $e['quelle'];
+    }
+    return implode("\n", $z);
+}
+
+/** Der Stand des letzten Uebernehmens (data/plugins/<ordner>/favoriten_stand.json) - nur Nummern und Namen. */
+function asn_favoriten_stand()
+{
+    $d = asn_json_lesen(asn_paths()['datadir'] . '/favoriten_stand.json');
+    if (!isset($d['zeit']) || !is_int($d['zeit'])) {
+        return null;
+    }
+    $zonen = array();
+    foreach (isset($d['zonen']) && is_array($d['zonen']) ? $d['zonen'] : array() as $z) {
+        if (!is_array($z) || !isset($z['zone']) || !is_int($z['zone'])) {
+            continue;
+        }
+        $n = array();
+        foreach (isset($z['nachher']) && is_array($z['nachher']) ? $z['nachher'] : array() as $x) {
+            if (is_array($x) && isset($x['id']) && is_int($x['id'])) {
+                $n[] = array('id' => $x['id'], 'name' => isset($x['name']) && is_string($x['name']) ? $x['name'] : '');
+            }
+        }
+        $zonen[] = array('zone' => $z['zone'], 'gesetzt' => isset($z['gesetzt']) && is_int($z['gesetzt']) ? $z['gesetzt'] : 0, 'nachher' => $n);
+    }
+    $ueb = array();
+    foreach (isset($d['uebersprungen']) && is_array($d['uebersprungen']) ? $d['uebersprungen'] : array() as $u) {
+        if (is_array($u) && isset($u['nr']) && is_int($u['nr'])) {
+            $ueb[] = array('nr' => $u['nr'], 'grund' => isset($u['grund']) && is_string($u['grund']) ? $u['grund'] : '');
+        }
+    }
+    return array('zeit' => $d['zeit'], 'ok' => !empty($d['ok']), 'grund' => isset($d['grund']) && is_string($d['grund']) ? $d['grund'] : '',
+                 'zonen' => $zonen, 'uebersprungen' => $ueb,
+                 'vorher' => isset($d['vorher']) && is_string($d['vorher']) ? $d['vorher'] : '');
+}
+
+/**
+ * Hintergrundvorgang "favoriten": die gespeicherte Liste in die Zonen von sonn uebernehmen (ersetzt deren
+ * Favoriten). Die bisherigen Favoriten jeder Zone landen vorher als Kopie in data/plugins/<ordner>/
+ * favoriten_vorher_<Zeit>.json (0600). Rueckgabe wie asn_bibliothek(): array(ok, grund, text, ergebnis).
+ */
+function asn_favoriten_uebernehmen()
+{
+    $cfg = asn_config(false);
+    list($da, $eigen, $kurz) = asn_container();
+    if ($da !== true || !$eigen) {
+        return array(false, $da === false ? 'CONTAINER_FEHLT' : ($da === null ? 'DOCKER_FEHLER|0' : 'CONTAINER_FREMD|' . asn_namen()['container']), '', '');
+    }
+    if (!$kurz['laeuft']) {
+        return array(false, 'CONTAINER_STEHT', '', '');
+    }
+    list($ok, $g, $d) = asn_sonn_fragen(asn_namen()['container'], 'favoriten', $cfg);
+    $p = asn_paths();
+    $vorher = '';
+    $zonen = array();
+    if (is_array($d) && isset($d['zonen']) && is_array($d['zonen'])) {
+        $kopie = array();
+        foreach ($d['zonen'] as $z) {
+            if (!is_array($z) || !isset($z['zone']) || !is_int($z['zone'])) {
+                continue;
+            }
+            if (isset($z['vorher']) && is_array($z['vorher']) && $z['vorher']) {
+                $kopie[(string) $z['zone']] = $z['vorher'];
+            }
+            $zonen[] = array('zone' => $z['zone'], 'gesetzt' => isset($z['gesetzt']) && is_int($z['gesetzt']) ? $z['gesetzt'] : 0,
+                             'nachher' => isset($z['nachher']) && is_array($z['nachher']) ? $z['nachher'] : array());
+        }
+        if ($kopie) {
+            $vorher = 'favoriten_vorher_' . date('Ymd_His') . '.json';
+            if (!asn_json_schreiben($p['datadir'] . '/' . $vorher, array('zeit' => time(), 'zonen' => $kopie), 0600)) {
+                $vorher = '';
+                asn_log('Favoriten: die Kopie der bisherigen Favoriten liess sich nicht schreiben.');
+            }
+        }
+    }
+    $ueb = is_array($d) && isset($d['uebersprungen']) && is_array($d['uebersprungen']) ? $d['uebersprungen'] : array();
+    asn_json_schreiben($p['datadir'] . '/favoriten_stand.json', array('zeit' => time(), 'ok' => $ok, 'grund' => (string) $g,
+        'zonen' => $zonen, 'uebersprungen' => $ueb, 'vorher' => $vorher), 0600);
+    $teile = array();
+    foreach ($zonen as $z) {
+        $teile[] = sprintf(asn_klartext('FAV.T_ZONE'), $z['zone'], $z['gesetzt']);
+    }
+    $nrn = array();
+    foreach ($ueb as $u) {
+        if (is_array($u) && isset($u['nr']) && is_int($u['nr'])) {
+            $nrn[] = $u['nr'];
+        }
+    }
+    if ($nrn) {
+        $teile[] = sprintf(asn_klartext('FAV.T_UEBERSPRUNGEN'), implode(', ', $nrn));
+    }
+    $text = implode('; ', $teile);
+    if (!$ok) {
+        return array(false, $g !== '' ? $g : 'ABFRAGE_ANTWORT|0',
+            $text !== '' ? $text : (is_array($d) && isset($d['text']) ? (string) $d['text'] : ''), '');
+    }
+    return array(true, '', $text, 'FAVORITEN');
 }
 
 /* ==================================================================
@@ -3379,6 +3734,13 @@ function asn_sicherung_wert_pruefen($k, $w)
             return $text(is_string($w) && ($w === '' || preg_match('/^[A-Za-z0-9._@\-]{1,64}\z/', $w) === 1));
         case 'sonn_kennwort':
             return $text(is_string($w) && strlen($w) <= 256 && !preg_match('/[\x00-\x1F\x7F]/', $w));
+        case 'favoriten':
+            if (!is_string($w) || strlen($w) > 65536) {
+                return $text(false);
+            }
+            return asn_favoriten_lesen($w)[1];
+        case 'favoriten_zonen':
+            return is_string($w) ? asn_favoriten_zonen_lesen($w)[1] : $text(false);
     }
     return array(sprintf(asn_t('EINST.SICH_FREMD'), asn_e($k)));
 }
@@ -3685,7 +4047,8 @@ function asn_probe_werte(array $pk)
         }
     }
     list($w['mac'], $w['mac_herkunft']) = asn_probe_mac($pk);
-    $mu = isset($pk['mounts']['/musik']['quelle']) ? (string) $pk['mounts']['/musik']['quelle'] : '';
+    $mm = asn_musik_mount(isset($pk['mounts']) && is_array($pk['mounts']) ? $pk['mounts'] : array());
+    $mu = $mm !== null ? (string) $mm['quelle'] : '';
     if ($mu !== '') {
         $g = asn_musik_pruefen($mu, true);
         if ($g === '' && asn_musik_wahl_tauglich($mu)) {
@@ -3956,13 +4319,20 @@ function asn_weiter_schritte(array $cfg, array $zu)
     $eins = $s === null || $konten < 0 ? null : ($konten > 0 && $lox === 1);
     $zwei = $s === null ? null : $gek === 1;
     $drei = $s === null ? null : (count($zonen) > 0 && $ohne === 0);
-    $vier = trim((string) $cfg['musik_pfad']) === '' ? false : null;
+    // 0.9.2 Nachzug: Schritt 4 gemessen - erledigt, sobald die Lokale Bibliothek Titel hat (oeffentliche API von sonn,
+    // Stand der letzten Minute); offen ohne Musikordner oder mit 0 Titeln; nicht messbar, wenn sonn nichts sagt.
+    $titel = ($s !== null && isset($s['titel']) && is_int($s['titel'])) ? $s['titel'] : -1;
+    if (trim((string) $cfg['musik_pfad']) === '') {
+        $vier = false;
+    } else {
+        $vier = $titel < 0 ? null : $titel > 0;
+    }
     $fuenf = asn_gesundheit()[0] === 5;
     return array(
         array(1, $eins, 'WEITER.S1', $konten),
         array(2, $zwei, 'WEITER.S2', ''),
         array(3, $drei, 'WEITER.S3', count($zonen) . '|' . $ohne),
-        array(4, $vier, 'WEITER.S4', ''),
+        array(4, $vier, 'WEITER.S4', $titel),
         array(5, $fuenf, 'WEITER.S5', ''),
     );
 }

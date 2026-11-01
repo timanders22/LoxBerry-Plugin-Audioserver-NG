@@ -231,9 +231,13 @@ function asn_test_docker_zeilen()
         $z[] = array($k['bild'] === $sdef['bild'], asn_t('TEST.F_ABBILD'), asn_e(sprintf(asn_t('TEST.A_ABBILD'), asn_kurztext($k['bild'], 90),
             asn_kurzdigest($sdef['digest']))));
         if ($sdef['musik'] !== '') {
-            $m = isset($k['mounts']['/musik']) ? $k['mounts']['/musik'] : null;
-            $z[] = array($m !== null && !$m['rw'], asn_t('TEST.F_MUSIK'), asn_e($m === null ? asn_t('TEST.A_MUSIK_FEHLT')
-                : sprintf(asn_t($m['rw'] ? 'TEST.A_MUSIK_RW' : 'TEST.A_MUSIK_RO'), $m['quelle'])));
+            // 0.9.2 Nachzug: gut nur am neuen Ort (Lokale Bibliothek von sonn). Ein Container mit dem alten /musik
+            // (bis 0.9.2) ist rot - sonn sieht den Ordner dort nicht; "Container anlegen oder angleichen" hilft.
+            $m = asn_musik_mount($k['mounts']);
+            $neu = $m !== null && $m['ziel'] === ASN_MUSIK_ZIEL;
+            $z[] = array($neu && !$m['rw'], asn_t('TEST.F_MUSIK'), asn_e($m === null ? asn_t('TEST.A_MUSIK_FEHLT')
+                : (!$neu ? sprintf(asn_t('TEST.A_MUSIK_ALT'), $m['quelle'])
+                : sprintf(asn_t($m['rw'] ? 'TEST.A_MUSIK_RW' : 'TEST.A_MUSIK_RO'), $m['quelle'], ASN_MUSIK_NAME))));
         }
         if ($k['def'] !== $sdef['hash']) {
             $z[] = array(null, asn_t('TEST.F_SOLL'), asn_e(asn_t('TEST.A_SOLL_ANDERS')));
@@ -294,6 +298,18 @@ function asn_test_docker_zeilen()
         }
         $z[] = array(($ohne || $fz) ? false : ($bekannt === count($zon) ? true : null), asn_t('ZONEN.F_TEST'),
             asn_e((($ohne || $fz) ? asn_zonen_maengel_text($zon) : asn_t($bekannt === count($zon) ? 'ZONEN.A_OK' : 'ZONEN.A_KEINE_AUSSAGE')) . $hinweis));
+    }
+    // 0.9.2 Nachzug: Bibliothek gemessen - Titel der Lokalen Bibliothek und ob der Musikordner dort als Ordner
+    // ASN_MUSIK_NAME erscheint (oeffentliche API /api/v1/browse). Nur mit gewaehltem Musikordner.
+    if ($sok && $sdef['musik'] !== '') {
+        $ti = isset($d['titel']) && is_int($d['titel']) && $d['titel'] >= 0 ? $d['titel'] : -1;
+        $si = isset($d['musik_sichtbar']) && is_bool($d['musik_sichtbar']) ? $d['musik_sichtbar'] : null;
+        if ($ti < 0 || $si === null) {
+            $z[] = array(null, asn_t('TEST.F_BIBLIOTHEK'), asn_e(asn_t('TEST.A_BIBLIOTHEK_UNKLAR')));
+        } else {
+            $z[] = array($si && $ti > 0, asn_t('TEST.F_BIBLIOTHEK'), asn_e(sprintf(asn_t($si ? 'TEST.A_BIBLIOTHEK' : 'TEST.A_BIBLIOTHEK_OHNE'),
+                $ti, ASN_MUSIK_NAME) . ($si && $ti === 0 ? ' ' . asn_t('TEST.H_BIBLIOTHEK_SCANNEN') : '')));
+        }
     }
     if (!empty($d['mqtt_ein'])) {
         $z[] = array(null, asn_t('TEST.F_SONN_MQTT'), asn_e(asn_t('TEST.A_SONN_MQTT')));

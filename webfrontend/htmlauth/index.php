@@ -335,6 +335,56 @@ if ($asn_post) {
             $asn_meldungen[] = asn_config_speichern($asn_neu) ? asn_t('KONTO.M_GESPEICHERT') : asn_t('EINST.F_SPEICHERN');
             break;
 
+        case 'favoriten':
+            /* 0.9.2: Favoritenliste. "speichern" schreibt nur die Konfiguration; "uebernehmen" (eingreifend) braucht den
+             * Ja-Haken, speichert und startet den Hintergrundvorgang "favoriten" - er ersetzt die Favoriten der Zonen in sonn. */
+            $asn_tab = 'tab-settings';
+            $asn_aktion = $asn_wert('aktion');
+            if (!in_array($asn_aktion, array('speichern', 'uebernehmen'), true)) {
+                $asn_misslungen[] = asn_t('ALLG.FORMULAR_UNBEKANNT');
+                break;
+            }
+            $asn_ft = (isset($_POST['favoriten']) && is_string($_POST['favoriten'])) ? str_replace("\r", '', $_POST['favoriten']) : '';
+            $asn_fz = $asn_wert('favoriten_zonen');
+            $asn_zurueck = function () use (&$asn_zusatz, $asn_ft, $asn_fz) {
+                $asn_zusatz['fav_eingabe'] = substr($asn_ft, 0, 65536);
+                $asn_zusatz['fav_zonen'] = substr($asn_fz, 0, 100);
+            };
+            if ($asn_aktion === 'uebernehmen' && !isset($_POST['favoriten_ok'])) {
+                $asn_misslungen[] = asn_t('FAV.F_HAKEN');
+                $asn_zurueck();
+                break;
+            }
+            if (strlen($asn_ft) > 65536) {
+                $asn_fehler[] = asn_t('FAV.F_LANG');
+                break;
+            }
+            list($asn_fl, $asn_ff) = asn_favoriten_lesen($asn_ft);
+            list(, $asn_fzf) = asn_favoriten_zonen_lesen($asn_fz);
+            if ($asn_ff || $asn_fzf) {
+                $asn_fehler = array_merge($asn_fehler, $asn_ff, $asn_fzf);
+                $asn_zurueck();
+                break;     // eine Beanstandung: NICHTS wird gespeichert
+            }
+            if ($asn_aktion === 'uebernehmen' && !$asn_fl) {
+                $asn_misslungen[] = asn_grund_text('FAV_LEER');
+                $asn_zurueck();
+                break;
+            }
+            $asn_neu = $asn_cfg;
+            $asn_neu['favoriten'] = asn_favoriten_text($asn_fl);
+            $asn_neu['favoriten_zonen'] = implode(',', asn_favoriten_zonen_lesen($asn_fz)[0]);
+            if (!asn_config_speichern($asn_neu)) {
+                $asn_misslungen[] = asn_t('EINST.F_SPEICHERN');
+                $asn_zurueck();
+                break;
+            }
+            $asn_meldungen[] = sprintf(asn_t('FAV.M_GESPEICHERT'), count($asn_fl));
+            if ($asn_aktion === 'uebernehmen') {
+                $asn_vorgang_los('favoriten');
+            }
+            break;
+
         case 'sicherung':
             $asn_tab = 'tab-settings';
             $asn_aktion = $asn_wert('aktion');
@@ -755,7 +805,7 @@ if ($asn_rahmen) {
 <?php foreach ($asn_weiter as $asn_ws) { list($asn_wn, $asn_wz, $asn_wk, $asn_wx) = $asn_ws; ?>
 <tr><td><b><?= asn_e(array("\u{2460}", "\u{2461}", "\u{2462}", "\u{2463}", "\u{2464}")[$asn_wn - 1]) ?></b> <?= asn_e(asn_t($asn_wk . '_KURZ')) ?></td>
 <td><?= $asn_zeichen($asn_wz) ?> <?= asn_e(asn_t($asn_wz === true ? 'WEITER.ERLEDIGT' : ($asn_wz === false ? 'WEITER.OFFEN' : 'WEITER.SELBST'))) ?></td>
-<td><?= asn_e(asn_t($asn_wk)) ?><?php if ($asn_wn === 1 && is_int($asn_wx) && $asn_wx >= 0) { ?> <span class="sm-hilfe">(<?= asn_e(sprintf(asn_t('WEITER.KONTEN'), $asn_wx)) ?>)</span><?php } ?><?php if ($asn_wn === 3) { list($asn_wa, $asn_wo) = explode('|', $asn_wx); ?> <span class="sm-hilfe">(<?= asn_e(sprintf(asn_t('WEITER.ZONEN'), (int) $asn_wa, (int) $asn_wo)) ?>)</span><?php } ?><?php if ($asn_wn === 4 && trim((string) $asn_cfg['musik_pfad']) === '') { ?> <span class="sm-hilfe">(<?= asn_e(asn_t('WEITER.MUSIK_FEHLT')) ?>)</span><?php } ?></td>
+<td><?= asn_e(asn_t($asn_wk)) ?><?php if ($asn_wn === 1 && is_int($asn_wx) && $asn_wx >= 0) { ?> <span class="sm-hilfe">(<?= asn_e(sprintf(asn_t('WEITER.KONTEN'), $asn_wx)) ?>)</span><?php } ?><?php if ($asn_wn === 3) { list($asn_wa, $asn_wo) = explode('|', $asn_wx); ?> <span class="sm-hilfe">(<?= asn_e(sprintf(asn_t('WEITER.ZONEN'), (int) $asn_wa, (int) $asn_wo)) ?>)</span><?php } ?><?php if ($asn_wn === 4 && trim((string) $asn_cfg['musik_pfad']) === '') { ?> <span class="sm-hilfe">(<?= asn_e(asn_t('WEITER.MUSIK_FEHLT')) ?>)</span><?php } elseif ($asn_wn === 4 && is_int($asn_wx) && $asn_wx >= 0) { ?> <span class="sm-hilfe">(<?= asn_e(sprintf(asn_t($asn_wx > 0 ? 'WEITER.TITEL' : 'WEITER.TITEL_KEINE'), $asn_wx)) ?>)</span><?php } ?></td>
 <td><?php if ($asn_wn === 2) { ?><?php if ($asn_seriennr !== '') { ?><button data-role="none" class="sm-btn sm-b-lesen sm-kopie" type="button" data-kopie="<?= asn_e($asn_seriennr) ?>"><?= asn_e(asn_t('WEITER.K_SERIENNUMMER')) ?></button><?php } else { ?>-<?php } ?>
 <?php } elseif ($asn_wn === 5) { ?><a class="sm-btn sm-b-lesen" href="index.php?form=test"><?= asn_e(asn_t('WEITER.K_TEST')) ?></a>
 <?php } elseif ($asn_verw_url !== '') { ?><a class="sm-btn sm-b-lesen" href="<?= asn_e($asn_verw_url) ?>" target="_blank" rel="noopener"><?= asn_e(asn_t('WEITER.K_VERWALTUNG')) ?></a>
@@ -792,6 +842,65 @@ if ($asn_rahmen) {
   </form>
 </div>
 <?php } ?>
+
+<?php /* 0.9.2: Favoritenliste (Wunsch Hausherr 01.11.2026; Bedienung wie Chromecast4lox 1.3.25, Quellen). Werkszustand leer. */
+$asn_fav_text = isset($asn_zusatz['fav_eingabe']) && is_string($asn_zusatz['fav_eingabe']) ? $asn_zusatz['fav_eingabe'] : (string) $asn_cfg['favoriten'];
+$asn_fav_zonen = isset($asn_zusatz['fav_zonen']) && is_string($asn_zusatz['fav_zonen']) ? $asn_zusatz['fav_zonen'] : (string) $asn_cfg['favoriten_zonen'];
+list($asn_fav_liste) = asn_favoriten_lesen((string) $asn_cfg['favoriten']);
+$asn_fav_stand = asn_favoriten_stand();
+$asn_fav_laeuft = $asn_vg['vorgang'] === 'favoriten' && in_array($asn_vg['zustand'], array('gestartet', 'laeuft'), true); ?>
+<div class="sm-step" id="asn_favoriten">
+<h2><?= asn_e(asn_t('FAV.H')) ?></h2>
+<p><?= asn_e(asn_t('FAV.TEXT')) ?></p>
+<p class="sm-hilfe"><?= asn_e(asn_t('FAV.H_NUMMER')) ?></p>
+<p class="sm-hilfe"><?= asn_e(asn_t('FAV.H_LISTE')) ?><?= trim((string) $asn_cfg['musik_pfad']) === '' ? ' ' . asn_e(asn_t('FAV.H_KEIN_MUSIKORDNER')) : '' ?></p>
+<form action="index.php" method="post" autocomplete="off">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
+<input data-role="none" type="hidden" name="fmt" value="<?= asn_e($asn_fmt) ?>">
+<input data-role="none" type="hidden" name="formular" value="favoriten">
+<div class="sm-feld"><label for="asn_favoriten"><?= asn_e(asn_t('FAV.L_LISTE')) ?></label>
+<textarea data-role="none" id="asn_favoriten" name="favoriten" rows="8" style="width:100%;font-family:monospace;" placeholder="1 = radio | Sender | https://…/stream.mp3&#10;2 = liste | Album | Interpret/Album&#10;3 = datei | Lied | Interpret/Album/01 Lied.mp3"><?= asn_e($asn_fav_text) ?></textarea>
+<p class="sm-hilfe"><?= asn_e(sprintf(asn_t('FAV.H_FELD'), ASN_FAV_MAX)) ?></p></div>
+<div class="sm-feld"><label for="asn_favoriten_zonen"><?= asn_e(asn_t('FAV.L_ZONEN')) ?></label>
+<input data-role="none" type="text" id="asn_favoriten_zonen" name="favoriten_zonen" value="<?= asn_e($asn_fav_zonen) ?>" maxlength="100" placeholder="1,2">
+<p class="sm-hilfe"><?= asn_e(asn_t('FAV.H_ZONEN')) ?></p></div>
+<div class="sm-knopfreihe">
+<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="speichern"><?= asn_e(asn_t('ALLG.K_SPEICHERN')) ?></button>
+</div>
+<div class="sm-warnung"><?= asn_e(asn_t('FAV.H_ERSETZT')) ?></div>
+<div class="sm-feld"><label><input data-role="none" type="checkbox" name="favoriten_ok" value="1"> <?= asn_e(asn_t('FAV.HAKEN')) ?></label></div>
+<div class="sm-knopfreihe">
+<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="uebernehmen"<?= $asn_fav_laeuft ? ' disabled' : '' ?>><?= asn_e(asn_t('FAV.K_UEBERNEHMEN')) ?></button>
+</div>
+</form>
+<?php if ($asn_fav_liste) { ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th style="width:8%;"><?= asn_e(asn_t('FAV.SP_NR')) ?></th><th style="width:10%;"><?= asn_e(asn_t('FAV.SP_ART')) ?></th><th style="width:30%;"><?= asn_e(asn_t('FAV.SP_NAME')) ?></th><th><?= asn_e(asn_t('FAV.SP_QUELLE')) ?></th></tr>
+<?php foreach ($asn_fav_liste as $asn_fe) { ?>
+<tr><td><b><?= (int) $asn_fe['nr'] ?></b></td><td><?= asn_e($asn_fe['art']) ?></td><td><?= asn_e($asn_fe['name']) ?></td><td><span class="sm-mono"><?= asn_e($asn_fe['quelle']) ?></span></td></tr>
+<?php } ?>
+</table>
+</div>
+<?php } else { ?>
+<p class="sm-hilfe"><?= asn_e(asn_t('FAV.LEER')) ?></p>
+<?php } ?>
+<?php if ($asn_fav_laeuft) { ?>
+<div class="sm-hinweis"><?= asn_e(asn_vorgang_satz($asn_vg)) ?></div>
+<?php } elseif ($asn_fav_stand !== null) { ?>
+<h3><?= asn_e(sprintf(asn_t('FAV.H_STAND'), date('Y-m-d H:i:s', $asn_fav_stand['zeit']))) ?></h3>
+<div class="<?= $asn_fav_stand['ok'] ? 'sm-hinweis' : 'sm-warnung' ?>"><?= asn_e($asn_fav_stand['ok'] ? asn_t('FAV.STAND_OK') : sprintf(asn_t('FAV.STAND_FEHLER'), asn_grund_text($asn_fav_stand['grund']))) ?></div>
+<?php foreach ($asn_fav_stand['zonen'] as $asn_fz) { ?>
+<p class="sm-hilfe"><?= asn_e(sprintf(asn_t('FAV.STAND_ZONE'), $asn_fz['zone'], $asn_fz['nachher'] ? implode(' · ', array_map(function ($x) { return $x['id'] . ' ' . $x['name']; }, $asn_fz['nachher'])) : '-')) ?></p>
+<?php } ?>
+<?php foreach ($asn_fav_stand['uebersprungen'] as $asn_fu) { ?>
+<p class="sm-hilfe"><?= asn_e(sprintf(asn_t('FAV.STAND_UEBERSPRUNGEN'), $asn_fu['nr'], asn_grund_text($asn_fu['grund']))) ?></p>
+<?php } ?>
+<?php if ($asn_fav_stand['vorher'] !== '') { ?>
+<p class="sm-hilfe"><?= asn_e(sprintf(asn_t('FAV.STAND_VORHER'), $asn_fav_stand['vorher'])) ?></p>
+<?php } ?>
+<?php } ?>
+</div>
 
 <?php /* Nachfassung 3: die technischen Felder zugeklappt; offen, wenn eine Eingabe zurueckkommt (Beanstandung oder
    "Werte der Probe uebernehmen"). Das Ende des Aufklappbereichs steht in 06_probe_abbild.php nach dem Probe-Abschnitt. */ ?>
