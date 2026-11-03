@@ -10,7 +10,12 @@
 // 0.9.2 (01.11.2026): {"auftrag":"favoriten","zonen":[..],"eintraege":[{nr,art,name,quelle}]} ersetzt die
 // Zonenfavoriten NUR ueber die dokumentierte oeffentliche API /api/v1 (INTEGRATING.md: GET/POST/PATCH/DELETE
 // /zones/{id}/favorites, GET /browse, GET /playlists) - keine Datei von sonn wird angefasst.
+// 0.9.3 (02.11.2026): {"auftrag":"tunein","ziel":"lesen|ausblenden|zeigen"} ist die EINZIGE Stelle, die eine Datei von sonn aendert - nur auf
+// Einstellung, nur den erkannten Block (siehe unten). Die Favoriten legen zusaetzlich Custom Streams an (Verwaltungs-API, sonn-Konto noetig).
 const fs = require('fs');
+const vm = require('vm');
+const crypto = require('crypto');
+let CUSTOM = null;   // 0.9.3: Ergebnis von Schritt 0, geht mit jeder Favoriten-Antwort hinaus
 let roh = '';
 let zuviel = false;
 process.stdin.setEncoding('utf8');
@@ -18,7 +23,10 @@ process.stdin.on('data', (d) => { if (roh.length + d.length <= 65536) { roh += d
 process.stdin.on('end', () => {
   haupt().catch((e) => aus({ ok: false, grund: 'SONN_FEHLER', text: String((e && e.message) || e).slice(0, 160) }));
 });
-function aus(o) { process.stdout.write(JSON.stringify(o) + '\n'); }
+function aus(o) {
+  if (CUSTOM !== null && o && o.favoriten) { o.custom = CUSTOM; }
+  process.stdout.write(JSON.stringify(o) + '\n');
+}
 async function hol(pfad, opt) {
   const c = new AbortController();
   const t = setTimeout(() => c.abort(), 5000);
@@ -209,6 +217,44 @@ async function bibliothekFinden(wurzeln, pfad, art) {
   }
   return '';
 }
+// 0.9.3, Schritt 0 der Favoriten: fehlende Radio-Favoriten als Custom Stream anlegen (Belege: sonn core 4.0.0-beta.22, dist/adapters/http/adminApi/content/
+// contentHandlers.js: GET /admin/api/content/radio/custom -> {stations:[{id,name,stream}]}, POST {name,stream} -> 201 {station}). Vergleich ueber die Adresse ohne
+// Gross-/Kleinschreibung. Nichts wird geloescht oder umbenannt. Rueckgabe null = kein Radio-Eintrag, sonst {angelegt, vorhanden, fehler}; wirft nie.
+async function customStreams(ein, soll) {
+  const radios = Array.from(soll.values()).filter((e) => e.art === 'radio' && /^https?:\/\//i.test(e.quelle));
+  if (radios.length === 0) { return null; }
+  const erg = { angelegt: 0, vorhanden: 0, fehler: '' };
+  if (typeof ein.benutzer !== 'string' || ein.benutzer === '' || typeof ein.kennwort !== 'string' || ein.kennwort === '') {
+    erg.fehler = 'KONTO_FEHLT';
+    return erg;
+  }
+  try {
+    const a = await hol('/admin/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: ein.benutzer, password: ein.kennwort }) });
+    const tok = a.json && typeof a.json.token === 'string' ? a.json.token : '';
+    if (a.code === 401 || a.code === 403 || (a.code === 200 && tok === '')) { erg.fehler = 'KONTO_FALSCH'; return erg; }
+    if (a.code !== 200) { erg.fehler = 'ANMELDUNG|' + a.code; return erg; }
+    const l = await hol('/admin/api/content/radio/custom', { headers: { Authorization: 'Bearer ' + tok } });
+    if (l.code !== 200 || !l.json || !Array.isArray(l.json.stations)) { erg.fehler = 'LISTE|' + l.code; return erg; }
+    const da = new Set(l.json.stations.map((x) => (x && typeof x.stream === 'string' ? x.stream.trim().toLowerCase() : '')));
+    for (const r of radios) {
+      const schluessel = r.quelle.trim().toLowerCase();
+      if (da.has(schluessel)) { erg.vorhanden++; continue; }
+      const p = await hol('/admin/api/content/radio/custom', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok },
+        body: JSON.stringify({ name: r.name, stream: r.quelle }) });
+      if (p.code >= 200 && p.code <= 299) {
+        erg.angelegt++;
+        da.add(schluessel);
+      } else if (erg.fehler === '') {
+        erg.fehler = 'ANLEGEN|' + p.code;
+      }
+    }
+  } catch (e) {
+    if (erg.fehler === '') { erg.fehler = 'NETZ'; }
+  }
+  return erg;
+}
 async function favoriten(ein) {
   const roh = Array.isArray(ein.eintraege) ? ein.eintraege.slice(0, 99) : [];
   const soll = new Map();
@@ -260,6 +306,8 @@ async function favoriten(ein) {
     return aus({ ok: false, grund: 'SONN_ANTWORTET_NICHT', favoriten: true });
   }
   if (uri.size === 0) { return aus({ ok: false, grund: 'FAV_NICHTS', uebersprungen: uebersprungen, favoriten: true }); }
+  // 0.9.3, Schritt 0: Custom Streams, nach dem Aufloesen und vor dem Leeren der Zonenfavoriten. Scheitert er, laufen die Favoriten weiter.
+  CUSTOM = await customStreams(ein, soll);
   const hoechste = Math.max(...uri.keys());
   const ergebnis = [];
   // 2. Je Zone: alte Liste merken, leeren, der Reihe nach anlegen, Platzhalter entfernen, nachlesen.
@@ -326,16 +374,87 @@ async function favoriten(ein) {
   }
   return aus({ ok: true, grund: '', zonen: ergebnis, uebersprungen: uebersprungen, favoriten: true });
 }
+// ---------------- 0.9.3: Vorgabesender von TuneIn (Wunsch Hausherr 01.11.2026) ----------------
+// sonn core 4.0.0-beta.22 zeigt ohne TuneIn-Benutzer drei fest eingebaute Sender (DEMO_STATIONS, getLocalStations in tuneinProvider.js); weder API noch Datei
+// schalten sie ab. Geaendert wird genau dieser eine Block und nur, wenn er genau einmal so dasteht wie erwartet und DEMO_STATIONS sonst nur in seiner Definition
+// vorkommt. Alles andere (neue Fassung, andere Zeile) heisst "unbekannt": NICHTS wird geschrieben. Die Aenderung vom 01.11.2026 von Hand gilt als "ausgeblendet".
+const TUNEIN_DATEI = '/app/dist/adapters/content/providers/tunein/tuneinProvider.js';
+const TUNEIN_KOPF = '    async getLocalStations() {\n        const username = this.username;\n        if (!username) {\n';
+const TUNEIN_HERSTELLER = TUNEIN_KOPF + '            return DEMO_STATIONS;\n';
+const TUNEIN_PLUGIN = TUNEIN_KOPF + '            return []; // Audioserver NG: Vorgabesender ausgeblendet\n';
+const TUNEIN_HAND = TUNEIN_KOPF + '            return []; // Claude 01.11.2026: Vorgabesender ausgeblendet (Hausherr)\n';
+function zaehle(t, s) { return t.split(s).length - 1; }
+function tuneinBefund(t) {
+  const her = zaehle(t, TUNEIN_HERSTELLER);
+  const unser = zaehle(t, TUNEIN_PLUGIN) + zaehle(t, TUNEIN_HAND);
+  const demo = zaehle(t, 'DEMO_STATIONS');
+  if (her === 1 && unser === 0 && demo === 2) { return 'sichtbar'; }
+  if (her === 0 && unser === 1 && demo === 1) { return 'ausgeblendet'; }
+  return 'unbekannt';
+}
+// Nur lesen. lage: sichtbar | ausgeblendet | unbekannt | fehlt; sha: Anfang der Pruefsumme; hand: die Aenderung von Hand steht drin.
+function tuneinLesen() {
+  let b;
+  try {
+    b = fs.readFileSync(TUNEIN_DATEI);
+  } catch (e) {
+    return { lage: 'fehlt', sha: '', hand: false };
+  }
+  const sha = crypto.createHash('sha256').update(b).digest('hex').slice(0, 16);
+  const t = b.toString('utf8');
+  if (!Buffer.from(t, 'utf8').equals(b)) { return { lage: 'unbekannt', sha: sha, hand: false }; }
+  return { lage: tuneinBefund(t), sha: sha, hand: zaehle(t, TUNEIN_HAND) === 1 };
+}
+function tuneinAuftrag(ein) {
+  const antwort = (ok, grund, zusatz) => aus(Object.assign({ ok: ok, grund: grund, tunein_auftrag: true, tunein: tuneinLesen() }, zusatz || {}));
+  const ziel = ein.ziel;
+  if (ziel !== 'lesen' && ziel !== 'ausblenden' && ziel !== 'zeigen') { return antwort(false, 'TUNEIN_EINGABE'); }
+  if (ziel === 'lesen') { return antwort(true, '', { geaendert: false }); }
+  const vor = tuneinLesen();
+  if (vor.lage === 'fehlt') { return antwort(false, 'TUNEIN_FEHLT'); }
+  if (vor.lage === 'unbekannt') { return antwort(false, 'TUNEIN_UNBEKANNT'); }
+  const soll = ziel === 'ausblenden' ? 'ausgeblendet' : 'sichtbar';
+  if (vor.lage === soll) { return antwort(true, '', { geaendert: false }); }
+  const tmp = TUNEIN_DATEI + '.asn_neu_' + process.pid;
+  try {
+    const alt = fs.readFileSync(TUNEIN_DATEI, 'utf8');
+    const von = ziel === 'ausblenden' ? TUNEIN_HERSTELLER : (vor.hand ? TUNEIN_HAND : TUNEIN_PLUGIN);
+    const nach = ziel === 'ausblenden' ? TUNEIN_PLUGIN : TUNEIN_HERSTELLER;
+    const neu = alt.replace(von, () => nach);
+    if (tuneinBefund(neu) !== soll) { return antwort(false, 'TUNEIN_UNBEKANNT'); }
+    try {
+      new vm.Script(neu, { filename: 'tuneinProvider.js' });   // nur uebersetzen, nicht ausfuehren
+    } catch (e) {
+      return antwort(false, 'TUNEIN_SYNTAX');
+    }
+    // Sicherung wie am 01.11.2026 von Hand: neben der Datei, wird nie ueberschrieben.
+    const sich = TUNEIN_DATEI + '.vor_audioserverng_' + vor.sha;
+    if (!fs.existsSync(sich)) { fs.copyFileSync(TUNEIN_DATEI, sich, fs.constants.COPYFILE_EXCL); }
+    if (!fs.readFileSync(sich).equals(fs.readFileSync(TUNEIN_DATEI))) { return antwort(false, 'TUNEIN_SICHERUNG'); }
+    const st = fs.statSync(TUNEIN_DATEI);
+    fs.writeFileSync(tmp, neu, { mode: st.mode & 0o777 });
+    try { fs.chownSync(tmp, st.uid, st.gid); } catch (e) { /* nur Besitzer, die Datei bleibt lesbar */ }
+    fs.renameSync(tmp, TUNEIN_DATEI);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (e2) { /* gab es nicht */ }
+    return antwort(false, 'TUNEIN_SCHREIBEN', { text: text(e && e.code, 40) });
+  }
+  const nachher = tuneinLesen();
+  return antwort(nachher.lage === soll, nachher.lage === soll ? '' : 'TUNEIN_SCHREIBEN', { geaendert: true });
+}
 async function haupt() {
   // Fremdpruefung 31.10.2026, T3-4: eine abgeschnittene, leere oder unlesbare Eingabe oder ein unbekannter Auftrag ist
   // ein Fehler - bis dahin fiel sie auf {} zurueck, und ein kaputter "rescan" meldete als "stand" ok:true.
   let ein = null;
   try { ein = zuviel ? null : JSON.parse(roh); } catch (e) { ein = null; }
-  if (!ein || typeof ein !== 'object' || (ein.auftrag !== 'stand' && ein.auftrag !== 'rescan' && ein.auftrag !== 'favoriten')) {
+  if (!ein || typeof ein !== 'object' || (ein.auftrag !== 'stand' && ein.auftrag !== 'rescan' && ein.auftrag !== 'favoriten' && ein.auftrag !== 'tunein')) {
     return aus({ ok: false, grund: 'SONN_FEHLER', text: 'Eingabe unlesbar' });
   }
   if (ein.auftrag === 'favoriten') {
     return favoriten(ein);
+  }
+  if (ein.auftrag === 'tunein') {
+    return tuneinAuftrag(ein);
   }
   if (ein.auftrag === 'rescan') {
     let a;
@@ -382,6 +501,9 @@ async function haupt() {
   const zonen = (z.json && Array.isArray(z.json.zones) ? z.json.zones : []).slice(0, 24).map((x) => ({
     id: Number(x && x.id), name: text(x && x.name), state: text(x && x.state, 20),
     volume: x && typeof x.volume === 'number' ? x.volume : null,
+    // 0.9.3: Standardlautstaerke und Hoechstwert (kommen vom Miniserver, Parameter DefVol/MaxVol des Audio Players).
+    volumeLimits: { default: x && x.volumeLimits && typeof x.volumeLimits.default === 'number' ? x.volumeLimits.default : null,
+      max: x && x.volumeLimits && typeof x.volumeLimits.max === 'number' ? x.volumeLimits.max : null },
     track: { title: text(x && x.track && x.track.title), artist: text(x && x.track && x.track.artist) },
     source: { name: quelle(x && x.source) },
     // output: null = kein Ausgang eingerichtet; output.device.connected gibt es nur bei Squeezelite (sonn
@@ -400,5 +522,6 @@ async function haupt() {
     mac_id: text(s.macId, 20), ip: text(s.ip, 20), gekoppelt: s.paired === true && s.loxoneEnabled !== false,
     loxone_ein: s.loxoneEnabled === true, mqtt_ein: m.enabled === true, konten: k,
     titel: bib.titel, musik_sichtbar: bib.musik_sichtbar,
+    tunein: tuneinLesen(),
   });
 }

@@ -1,6 +1,6 @@
 # Audioserver NG – LoxBerry-Plugin
 
-Eine schlanke Hülle um **sonn core**, die Nachbildung des Loxone Audioservers. sonn core läuft unverändert als
+Eine schlanke Hülle um **sonn core**, die Nachbildung des Loxone Audioservers. sonn core läuft ab Werk unverändert als
 Docker-Container auf dem LoxBerry, mit eigener Adresse im Heimnetz und fester MAC. Die Loxone App bedient die Zonen
 **nativ** (Audio-Player-Baustein), die Ausgabe geht je Raum an einen Google-Cast-Lautsprecher.
 
@@ -10,15 +10,40 @@ DLNA/UPnP, Snapcast, Sendspin, Squeezelite, Music-Assistant-Player); mit diesem 
 **Amazon Echo wird nicht unterstützt** – sonn core 4.0.0-beta.22 hat keinen Ausgang für Echo/Alexa (Bluetooth nur als
 Eingang). Für Ansagen und Radio auf Echo-Geräten gibt es das Plugin [Alexa NG](https://wiki.loxberry.de/plugins/alexang/start).
 
-Version 0.9.2 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.3 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
-**Stand 0.9.2:** dritte Fassung (0.9.0 und 0.9.1 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
+**Stand 0.9.3:** vierte Fassung (0.9.0 bis 0.9.2 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
 gemessen. Gerätetest des Plugins am 31.10./01.11.2026 im Haus (Raspberry Pi 4, zwei Google-Cast-Zonen): Einrichten mit einem
 Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte über das MQTT-Gateway V2 und das sichere
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
 
 ---
+
+## Neu in 0.9.3
+
+- **Vorgabesender von TuneIn ausblenden** (Reiter Einstellungen, Abschnitt „Radio: Vorgabesender von TuneIn“, ab Werk aus):
+  Ohne TuneIn-Benutzer zeigt sonn drei fest eingebaute Sender (BBC Radio 1, NPO Radio 2, KEXP), die sich in sonn nicht
+  löschen lassen. Mit dem Haken ändert das Plugin dafür eine Zeile in `tuneinProvider.js` im Container. Das ist der einzige
+  Eingriff in eine Datei von sonn. Weil die Änderung ein Neuanlegen des Containers nicht übersteht, prüft das Plugin jede
+  Minute und holt sie nach, sobald keine Zone spielt; sonn startet dabei einmal neu. Die Datei wird vorher gesichert, neben
+  der Datei im Container und im Datenordner des Plugins (`sicherung_tunein`).
+- **Neue Fassung von sonn:** Steht die Zeile nicht mehr genau so da, ersetzt das Plugin nichts, startet nichts neu und meldet
+  das im Reiter Einstellungen, im Reiter Test und im Protokoll. Antwortet sonn nach einer Änderung nicht, spielt das Plugin
+  die Sicherung zurück und versucht es bei dieser Datei nicht wieder von selbst.
+- **Custom Streams aus der Favoritenliste:** Beim Übernehmen legt das Plugin `radio`-Einträge zusätzlich als Custom Stream in
+  sonn an, wenn das sonn-Konto eingetragen ist. Dann zeigen App und Zone den Sendernamen, und der Sender steht auch ohne
+  Favorit unter Radio → Custom Streams. Vorhandene Adressen bleiben, wie sie sind; gelöscht und umbenannt wird nichts. Ohne
+  Konto oder bei falschem Konto laufen die Favoriten trotzdem durch, mit dem Satz „Custom Streams nicht angelegt: Konto fehlt/falsch“.
+- **Reiter Test zeigt je Zone die Startlautstärke**, die aus Loxone kommt (Audio Player, Parameter Standardlautstärke), und
+  rät unter 20 zum Erhöhen in Loxone Config. Das Plugin setzt sie nicht selbst: Der Miniserver überschreibt sie bei jedem Hochladen.
+- **Die drei Beispielsender** kommen von sonn; BBC Radio 1 liefert dort keine Musik mehr. Eigene Sender gehören unter Custom
+  Streams oder in die Favoritenliste.
+- Pflege: doppeltes Wort im Protokoll der Befehlsbrücke berichtigt; ein nicht schreibbares `cron.err` verhindert den Minutenlauf
+  nicht mehr; ein Kindprozess, der SIGTERM übergeht, hält keinen Aufruf mehr auf.
+
+Gegen Attrappen und gegen die echte Datei aus sonn core 4.0.0-beta.22 geprüft; das Umstellen im laufenden Container dieser
+Fassung ist noch nicht am Gerät gemessen.
 
 ## Neu in 0.9.2
 
@@ -261,7 +286,7 @@ und im LoxBerry-Wiki auf der Seite [Audioserver NG](https://wiki.loxberry.de/plu
 Ins Internet geht das Plugin nur auf Knopfdruck und nur zu ghcr.io: beim Laden eines Abbilds (Anlegen, Update) und
 beim Anzeigen der verfügbaren Fassungen. Für die Liste holt es anonym, ohne Konto, einen Lese-Token und fragt die
 Tag-Liste und je Tag den Digest ab; das Ergebnis bleibt 6 Stunden zwischengespeichert. Daten des Hauses werden dabei
-nicht gesendet. Das sonn-Konto (nur für „Bibliothek einlesen“) steht in der Konfiguration (0600) und geht nur über die
+nicht gesendet. Das sonn-Konto (für „Bibliothek einlesen“ und Custom Streams) steht in der Konfiguration (0600) und geht nur über die
 Standardeingabe in den Container, nie auf eine Befehlszeile.
 
 ## Lizenz

@@ -8,7 +8,7 @@
  * data/plugins/<ordner>/vorgang.json; ein zweiter Vorgang waehrend eines laufenden endet sofort (Sperrdatei mit
  * Prozessnummer, kein flock - die Sperre vererbte sich sonst an jedes Kind von proc_open, Regeln/03).
  *
- * Aufruf: php asn_vorgang.php anlegen|wechsel|starten|stoppen|neustart|update|rueckweg|probe_entfernen|bibliothek
+ * Aufruf: php asn_vorgang.php anlegen|wechsel|starten|stoppen|neustart|update|rueckweg|probe_entfernen|bibliothek|favoriten|tunein
  */
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 ini_set('display_errors', '0');

@@ -306,13 +306,14 @@ function asn_vorgaben()
         'zonen_hoechste'   => 0,          // hoechste je gemeldete Zonennummer (Abraeumen bei der Deinstallation)
         'favoriten'        => '',         // 0.9.2: je Zeile "Nr = radio|liste|datei | Name | Quelle" (ab Werk leer)
         'favoriten_zonen'  => '',         // 0.9.2: Zonen fuer die Favoriten, z. B. "1,2"; leer = alle Zonen von sonn
+        'tunein_ausblenden' => 0,         // 0.9.3: Vorgabesender von TuneIn in sonn ausblenden (ab Werk aus)
     );
 }
 
 /** Schluessel, die in einer Sicherung fehlen duerfen (dann gilt der geltende Wert). */
 function asn_spaet_schluessel()
 {
-    return array('befehle_mqtt_ein', 'steuerung_ein', 'endpunkt_ein', 'zonen_hoechste', 'favoriten', 'favoriten_zonen');
+    return array('befehle_mqtt_ein', 'steuerung_ein', 'endpunkt_ein', 'zonen_hoechste', 'favoriten', 'favoriten_zonen', 'tunein_ausblenden');
 }
 
 function asn_json_lesen($pfad)
@@ -447,6 +448,9 @@ function asn_token()
     $cfg = asn_config();
     if (trim((string) $cfg['aktionstoken']) === '') {
         $cfg['aktionstoken'] = asn_token_erzeugen();
+        asn_config_speichern($cfg);
+    } elseif (array_diff_key(asn_vorgaben(), asn_json_lesen(asn_paths()['config']))) {
+        // 0.9.3: nach einem Update fehlen neue Schluessel; die Konfiguration wird beim Oeffnen der Seite vervollstaendigt (sonst ist die Zeile im Reiter Test rot, bis jemand speichert).
         asn_config_speichern($cfg);
     }
     return (string) $cfg['aktionstoken'];
@@ -626,6 +630,40 @@ function asn_letzte_zeile($s)
  * ================================================================== */
 
 /**
+ * Auf ein Kind warten, ohne dass proc_close() haengen kann; Rueckgabe sein Rueckgabewert, 124 nach Ablauf der Frist.
+ * Hoechstens $warten Sekunden ungestoert, dann SIGTERM, hoechstens $frist Sekunden, dann SIGKILL, erst dann proc_close(). Bis 0.9.2 stand hier proc_close()
+ * ohne Frist: am Geraet hing mosquitto_sub am 01.11.2026 nach SIGTERM 5 Stunden fest, und der Aufrufer stand mit. proc_get_status() liefert den Rueckgabewert
+ * nur beim ersten Aufruf nach dem Ende, proc_close() danach -1 (PHP unter 8.3), darum kommt er von hier und nicht von proc_close().
+ */
+function asn_proc_abwarten($pr, $warten, $frist = 2.0)
+{
+    $stufe = 0;
+    $bis = microtime(true) + max(0.0, (float) $warten);
+    $schlaf = 2000;
+    while (true) {
+        $s = @proc_get_status($pr);
+        if (!is_array($s) || empty($s['running'])) {
+            $rc = is_array($s) && isset($s['exitcode']) ? (int) $s['exitcode'] : -1;
+            if (is_array($s) && !empty($s['signaled'])) { $rc = 128 + (int) $s['termsig']; }
+            @proc_close($pr);
+            return $stufe > 0 ? 124 : $rc;
+        }
+        if (microtime(true) >= $bis) {
+            if ($stufe === 1) {
+                @proc_terminate($pr, 9);
+                @proc_close($pr);
+                return 124;
+            }
+            @proc_terminate($pr, 15);
+            $stufe = 1;
+            $bis = microtime(true) + (float) $frist;
+        }
+        usleep($schlaf);
+        $schlaf = min(50000, $schlaf * 2);
+    }
+}
+
+/**
  * Einen Befehl argumentweise ausfuehren (proc_open mit Liste - keine Schale), begrenzt durch timeout. $stdin wird
  * hineingeschrieben (Zugangsdaten nie auf die Befehlszeile). Rueckgabe array(rc, stdout, stderr); rc 124 Zeitablauf,
  * 127 nicht ausfuehrbar. Unter Windows nur fuer Pruefstaende mit Attrappe (kein timeout-Programm).
@@ -636,7 +674,8 @@ function asn_aufruf(array $cmd, $sekunden, $stdin = null)
         return array(127, '', 'proc_open fehlt');
     }
     $win = DIRECTORY_SEPARATOR === '\\';
-    $voll = $win ? array() : array('timeout', (string) max(1, (int) $sekunden));
+    /* -k 5 (bis 0.9.2 ohne): uebergeht das Kind SIGTERM, wartet timeout sonst ewig, und ein hartes Ende von timeout liesse das Kind als Waise zurueck. */
+    $voll = $win ? array() : array('timeout', '-k', '5', (string) max(1, (int) $sekunden));
     foreach ($cmd as $a) {
         $voll[] = (string) $a;
     }
@@ -677,8 +716,9 @@ function asn_aufruf(array $cmd, $sekunden, $stdin = null)
     foreach ($offen as $h) {
         fclose($h);
     }
-    $rc = proc_close($proc);
-    return array((int) $rc, $aus[1], $aus[2]);
+    $rc = asn_proc_abwarten($proc, max(0, $ende - time()));
+    /* 137: timeout -k hat zugeschlagen, auch das ist fuer den Aufrufer Zeitablauf. */
+    return array((int) $rc === 137 ? 124 : (int) $rc, $aus[1], $aus[2]);
 }
 
 /** Das docker-Programm als Feld (Pruefstand: ASN_DOCKER_ATTRAPPE = PHP-Skript), oder array(). */
@@ -1479,11 +1519,19 @@ function asn_sonn_fragen($container, $auftrag, array $cfg = array())
             return array(false, 'FAV_LEER', null);
         }
         $ein['zonen'] = $zonen;
+        // 0.9.3: das sonn-Konto fuer die Custom Streams (nur ueber die Standardeingabe, wie bei rescan); ohne Konto bleibt das Feld leer.
+        if (isset($cfg['sonn_benutzer'], $cfg['sonn_kennwort']) && (string) $cfg['sonn_benutzer'] !== '' && (string) $cfg['sonn_kennwort'] !== '') {
+            $ein['benutzer'] = (string) $cfg['sonn_benutzer'];
+            $ein['kennwort'] = (string) $cfg['sonn_kennwort'];
+        }
         $ein['eintraege'] = array();
         foreach ($liste as $e) {
             $ein['eintraege'][] = array('nr' => $e['nr'], 'art' => $e['art'], 'name' => $e['name'], 'quelle' => $e['quelle']);
         }
         $frist = ASN_FAVORITEN_S;
+    }
+    if ($auftrag === 'tunein') {
+        $ein['ziel'] = isset($cfg['ziel']) ? (string) $cfg['ziel'] : 'lesen';
     }
     // Fremdpruefung 31.10.2026, T3-4: laesst sich die Eingabe nicht als JSON schreiben (ungueltiges UTF-8 im Kennwort),
     // geht gar nichts in den Container - bisher kam dort "" an, und die Abfrage lief als "stand" mit ok:true.
@@ -1506,6 +1554,9 @@ function asn_sonn_fragen($container, $auftrag, array $cfg = array())
     }
     if ($auftrag === 'favoriten' && empty($d['favoriten'])) {
         // 0.9.2: eine Antwort ohne das Merkmal "favoriten" stammt nicht aus dem Favoriten-Zweig (alte Abfrage).
+        return array(false, 'SONN_FEHLER', array('text' => 'Antwort passt nicht zum Auftrag'));
+    }
+    if ($auftrag === 'tunein' && empty($d['tunein_auftrag'])) {
         return array(false, 'SONN_FEHLER', array('text' => 'Antwort passt nicht zum Auftrag'));
     }
     return array(!empty($d['ok']), isset($d['grund']) && is_string($d['grund']) ? $d['grund'] : '', $d);
@@ -1549,6 +1600,10 @@ function asn_zonen_normieren($liste)
             return $v === '' ? '-' : str_replace(array('"', ';'), array("'", ','), $v);
         };
         $vol = isset($z['volume']) && is_numeric($z['volume']) ? (int) round((float) $z['volume']) : -1;
+        $grenze = function ($k) use ($z) {
+            $w = isset($z['volumeLimits'][$k]) && is_numeric($z['volumeLimits'][$k]) ? (int) round((float) $z['volumeLimits'][$k]) : -1;
+            return ($w >= 0 && $w <= 100) ? $w : -1;
+        };
         $aus[$nr] = array(
             'name'        => $txt(isset($z['name']) ? $z['name'] : ''),
             'zustand'     => asn_zustand_zahl(isset($z['state']) ? $z['state'] : ''),
@@ -1561,6 +1616,9 @@ function asn_zonen_normieren($liste)
                 : ((isset($z['output']['device']['connected']) && is_bool($z['output']['device']['connected']))
                     ? ($z['output']['device']['connected'] ? 1 : 0) : -1)),
             'fehler'      => !empty($z['error']) ? 1 : 0,
+            // 0.9.3: nur fuer den Reiter Test, geht nicht ueber MQTT (asn_mqtt_paare nennt seine Felder einzeln).
+            'start'       => $grenze('default'),
+            'hoechst'     => $grenze('max'),
         );
     }
     ksort($aus);
@@ -2456,6 +2514,8 @@ function asn_takt()
                             // der Ordner ASN_MUSIK_NAME dort sichtbar ist; -1 = nicht feststellbar.
                             'titel' => isset($d['titel']) && is_int($d['titel']) && $d['titel'] >= 0 ? $d['titel'] : -1,
                             'musik_sichtbar' => isset($d['musik_sichtbar']) && is_bool($d['musik_sichtbar']) ? ($d['musik_sichtbar'] ? 1 : 0) : -1,
+                            // 0.9.3: Lage der Herstellerdatei mit den Vorgabesendern (nur gelesen).
+                            'tunein' => asn_tunein_normieren(isset($d['tunein']) ? $d['tunein'] : null),
                         );
                         $z['zonen'] = $zon;
                         $z['ok'] = $lage['gesund'] >= 1 ? 1 : 0;
@@ -2507,6 +2567,9 @@ function asn_takt()
             asn_json_schreiben($p['gesendet'], $neu, 0600);
         }
     }
+    if (is_array($z['sonn']) && isset($z['sonn']['tunein'])) {
+        asn_tunein_takt($cfg, $z['sonn']['tunein'], $z['zonen']);
+    }
     @unlink($p['takt_sperre']);
     return array(0, 'Takt ' . $zaehler . ': ' . ($z['aktiv'] ? ($z['grund'] === '' ? 'sonn antwortet' : asn_grund_text($z['grund'])) : 'Verwaltung aus')
         . ', ' . max(0, $gesendet) . ' MQTT-Datagramme.');
@@ -2534,7 +2597,7 @@ function asn_log_wenn_neu($schluessel, $lage, $text)
 function asn_vorgaenge()
 {
     return array('anlegen', 'starten', 'stoppen', 'neustart', 'wechsel', 'update', 'rueckweg', 'probe_entfernen', 'bibliothek',
-                 'favoriten');
+                 'favoriten', 'tunein');
 }
 
 function asn_vorgang()
@@ -2641,6 +2704,9 @@ function asn_vorgang_ausfuehren($auftrag)
             break;
         case 'favoriten':
             $r = asn_favoriten_uebernehmen();
+            break;
+        case 'tunein':
+            $r = asn_tunein_vorgang($schritt);
             break;
         default:
             $r = array(false, 'VORGANG', '', '');
@@ -3451,7 +3517,25 @@ function asn_favoriten_stand()
     }
     return array('zeit' => $d['zeit'], 'ok' => !empty($d['ok']), 'grund' => isset($d['grund']) && is_string($d['grund']) ? $d['grund'] : '',
                  'zonen' => $zonen, 'uebersprungen' => $ueb,
-                 'vorher' => isset($d['vorher']) && is_string($d['vorher']) ? $d['vorher'] : '');
+                 'vorher' => isset($d['vorher']) && is_string($d['vorher']) ? $d['vorher'] : '',
+                 'custom' => isset($d['custom']) && is_array($d['custom']) ? $d['custom'] : null);
+}
+
+/** 0.9.3: der Satz zu den Custom Streams ('' = kein Radio-Eintrag). $klar: ohne HTML, fuer Vorgangstext und Protokoll. */
+function asn_custom_satz($c, $klar)
+{
+    if (!is_array($c)) {
+        return '';
+    }
+    $t = function ($s) use ($klar) {
+        return $klar ? asn_klartext($s) : asn_t($s);
+    };
+    $f = isset($c['fehler']) && is_string($c['fehler']) ? $c['fehler'] : '';
+    if ($f === 'KONTO_FEHLT' || $f === 'KONTO_FALSCH') {
+        return $t('FAV.T_CUSTOM_KONTO');
+    }
+    $s = sprintf($t('FAV.T_CUSTOM'), isset($c['angelegt']) ? (int) $c['angelegt'] : 0, isset($c['vorhanden']) ? (int) $c['vorhanden'] : 0);
+    return $f !== '' ? $s . ' ' . sprintf($t('FAV.T_CUSTOM_FEHLER'), str_replace('|', ' ', $f)) : $s;
 }
 
 /**
@@ -3495,7 +3579,8 @@ function asn_favoriten_uebernehmen()
     }
     $ueb = is_array($d) && isset($d['uebersprungen']) && is_array($d['uebersprungen']) ? $d['uebersprungen'] : array();
     asn_json_schreiben($p['datadir'] . '/favoriten_stand.json', array('zeit' => time(), 'ok' => $ok, 'grund' => (string) $g,
-        'zonen' => $zonen, 'uebersprungen' => $ueb, 'vorher' => $vorher), 0600);
+        'zonen' => $zonen, 'uebersprungen' => $ueb, 'vorher' => $vorher,
+        'custom' => is_array($d) && isset($d['custom']) && is_array($d['custom']) ? $d['custom'] : null), 0600);
     $teile = array();
     foreach ($zonen as $z) {
         $teile[] = sprintf(asn_klartext('FAV.T_ZONE'), $z['zone'], $z['gesetzt']);
@@ -3509,12 +3594,216 @@ function asn_favoriten_uebernehmen()
     if ($nrn) {
         $teile[] = sprintf(asn_klartext('FAV.T_UEBERSPRUNGEN'), implode(', ', $nrn));
     }
+    $satz = asn_custom_satz(is_array($d) && isset($d['custom']) ? $d['custom'] : null, true);
+    if ($satz !== '') {
+        $teile[] = $satz;
+    }
     $text = implode('; ', $teile);
     if (!$ok) {
         return array(false, $g !== '' ? $g : 'ABFRAGE_ANTWORT|0',
             $text !== '' ? $text : (is_array($d) && isset($d['text']) ? (string) $d['text'] : ''), '');
     }
     return array(true, '', $text, 'FAVORITEN');
+}
+
+/* ==================================================================
+ * TuneIn-Vorgabesender (0.9.3, Wunsch Hausherr 01.11.2026). Ab Werk aus. Die Datei liegt in der beschreibbaren Schicht des Containers und ist nach jedem
+ * Neuanlegen wieder im Herstellerzustand; deshalb prueft der Takt die Lage jede Minute und holt die Einstellung nach (ueber den Vorgang "tunein", nie waehrend
+ * einer Wiedergabe). Geaendert wird im Container (bin/asn_abfrage.js, Auftrag tunein): nur der erkannte Block. Eine andere Herstellerzeile wird gemeldet, nicht ersetzt.
+ * Antwortet sonn nach der Aenderung nicht, spielt der Vorgang die Sicherung zurueck und versucht es bei dieser Datei nicht wieder.
+ * ================================================================== */
+define('ASN_TUNEIN_DATEI', '/app/dist/adapters/content/providers/tunein/tuneinProvider.js');
+define('ASN_TUNEIN_WARTEN_S', 120);           // so lange darf sonn nach dem Neustart brauchen
+define('ASN_TUNEIN_PAUSE_S', 3600);           // der Takt versucht es bei derselben Datei hoechstens einmal je Stunde
+
+/** Die Lage aus einer Antwort von sonn: array(lage, sha, hand) mit nur bekannten Werten. */
+function asn_tunein_normieren($t)
+{
+    $lage = is_array($t) && isset($t['lage']) && in_array($t['lage'], array('sichtbar', 'ausgeblendet', 'unbekannt', 'fehlt'), true) ? $t['lage'] : '';
+    $sha = is_array($t) && isset($t['sha']) && is_string($t['sha']) && preg_match('/^[0-9a-f]{16}\z/', $t['sha']) === 1 ? $t['sha'] : '';
+    return array('lage' => $lage, 'sha' => $sha, 'hand' => is_array($t) && !empty($t['hand']) ? 1 : 0);
+}
+
+/** Die Lage der letzten Minute (Takt). lage '' = kein Stand. */
+function asn_tunein_stand()
+{
+    $z = asn_zustand();
+    return asn_tunein_normieren(is_array($z['sonn']) && isset($z['sonn']['tunein']) ? $z['sonn']['tunein'] : null);
+}
+
+function asn_tunein_merk()
+{
+    $d = asn_json_lesen(asn_paths()['datadir'] . '/tunein.json');
+    return array('versuch' => isset($d['versuch']) && is_int($d['versuch']) ? $d['versuch'] : 0,
+                 'sha' => isset($d['sha']) && is_string($d['sha']) ? $d['sha'] : '',
+                 'gesperrt' => isset($d['gesperrt']) && is_array($d['gesperrt']) ? array_values(array_filter($d['gesperrt'], 'is_string')) : array(),
+                 'hand' => !empty($d['hand']) ? 1 : 0);
+}
+
+function asn_tunein_merk_schreiben(array $m)
+{
+    return asn_json_schreiben(asn_paths()['datadir'] . '/tunein.json', $m, 0600);
+}
+
+/**
+ * Die Datei vor jeder Aenderung auch auf den LoxBerry holen (data/plugins/<ordner>/sicherung_tunein/, wie am 01.11.2026 von Hand): nur von dort laesst sie sich
+ * zurueckspielen, wenn sonn nicht mehr startet und "docker exec" nicht mehr geht. Rueckgabe der Pfad, '' = nicht gelungen (dann wird nichts geaendert).
+ */
+function asn_tunein_sichern($name, $sha)
+{
+    $ordner = asn_paths()['datadir'] . '/sicherung_tunein';
+    $f = $ordner . '/tunein_vorher_' . $sha . '.js';
+    if (is_file($f) && substr((string) hash_file('sha256', $f), 0, 16) === $sha) {
+        return $f;
+    }
+    if (!is_dir($ordner) && !@mkdir($ordner, 0755, true)) {
+        return '';
+    }
+    list($rc, $inhalt) = asn_docker(array('exec', $name, 'cat', ASN_TUNEIN_DATEI), ASN_ABFRAGE_S);
+    if ((int) $rc !== 0 || substr(hash('sha256', (string) $inhalt), 0, 16) !== $sha) {
+        return '';
+    }
+    $neu = $f . '.neu';
+    if (@file_put_contents($neu, $inhalt) !== strlen($inhalt) || !@rename($neu, $f)) {
+        return '';
+    }
+    @chmod($f, 0644);
+    return substr((string) hash_file('sha256', $f), 0, 16) === $sha ? $f : '';
+}
+
+/** Warten, bis sonn nach einem Neustart wieder antwortet und die Datei so dasteht wie erwartet. */
+function asn_tunein_warten($name, $erwartet)
+{
+    $frist = getenv('ASN_TUNEIN_WARTEN_ATTRAPPE') !== false ? (int) getenv('ASN_TUNEIN_WARTEN_ATTRAPPE') : ASN_TUNEIN_WARTEN_S;
+    $ende = time() + $frist;
+    do {
+        list($ok, , $d) = asn_sonn_fragen($name, 'stand');
+        if ($ok && is_array($d) && isset($d['zonen_code']) && (int) $d['zonen_code'] === 200
+            && asn_tunein_normieren(isset($d['tunein']) ? $d['tunein'] : null)['lage'] === $erwartet) {
+            return true;
+        }
+        if (time() >= $ende) {
+            return false;
+        }
+        sleep(3);
+    } while (true);
+}
+
+/** Vorgang "tunein": die Datei auf die Einstellung bringen. Rueckgabe wie asn_bibliothek(): array(ok, grund, text, ergebnis). */
+function asn_tunein_vorgang($schritt)
+{
+    $cfg = asn_config(false);
+    $ausblenden = !empty($cfg['tunein_ausblenden']);
+    $name = asn_namen()['container'];
+    list($da, $eigen, $kurz) = asn_container();
+    if ($da !== true || !$eigen) {
+        return array(false, $da === false ? 'CONTAINER_FEHLT' : ($da === null ? 'DOCKER_FEHLER|0' : 'CONTAINER_FREMD|' . $name), '', '');
+    }
+    if (!$kurz['laeuft']) {
+        return array(false, 'CONTAINER_STEHT', '', '');
+    }
+    $schritt('lesen');
+    list($ok, $g, $d) = asn_sonn_fragen($name, 'tunein', array('ziel' => 'lesen'));
+    if (!$ok || !is_array($d)) {
+        return array(false, $g !== '' ? $g : 'ABFRAGE_ANTWORT|0', is_array($d) && isset($d['text']) ? (string) $d['text'] : '', '');
+    }
+    $t = asn_tunein_normieren(isset($d['tunein']) ? $d['tunein'] : null);
+    $soll = $ausblenden ? 'ausgeblendet' : 'sichtbar';
+    if ($t['lage'] === $soll) {
+        return array(true, '', '', 'TUNEIN_UNVERAENDERT');
+    }
+    if ($t['lage'] !== 'sichtbar' && $t['lage'] !== 'ausgeblendet') {
+        asn_log('TuneIn-Vorgaben: Herstellerdatei nicht erkannt (Lage ' . ($t['lage'] !== '' ? $t['lage'] : '?') . ', Summe ' . $t['sha'] . ') - nichts geaendert, sonn nicht neu gestartet.');
+        return array(false, $t['lage'] === 'fehlt' ? 'TUNEIN_FEHLT' : 'TUNEIN_UNBEKANNT', '', '');
+    }
+    $m = asn_tunein_merk();
+    if ($ausblenden && in_array($t['sha'], $m['gesperrt'], true)) {
+        return array(false, 'TUNEIN_GESPERRT', '', '');
+    }
+    $m['versuch'] = time();
+    $m['sha'] = $t['sha'];
+    asn_tunein_merk_schreiben($m);
+    $schritt('sichern');
+    $sich = asn_tunein_sichern($name, $t['sha']);
+    if ($sich === '') {
+        return array(false, 'TUNEIN_SICHERUNG', '', '');
+    }
+    $schritt('aendern');
+    list($ok, $g, $d) = asn_sonn_fragen($name, 'tunein', array('ziel' => $ausblenden ? 'ausblenden' : 'zeigen'));
+    if (!$ok) {
+        // Im Container ist dann nichts umgestellt (der Auftrag schreibt zuletzt und unteilbar); sonn wurde nicht neu gestartet.
+        return array(false, $g !== '' ? $g : 'ABFRAGE_ANTWORT|0', is_array($d) && isset($d['text']) ? (string) $d['text'] : '', '');
+    }
+    $schritt('neustart');
+    $r = asn_schalten('neustart');
+    $schritt('nachsehen');
+    if ($r[0] && asn_tunein_warten($name, $soll)) {
+        asn_log('TuneIn-Vorgaben: ' . ($ausblenden ? 'ausgeblendet' : 'wieder sichtbar') . ', sonn antwortet nach dem Neustart. Sicherung: ' . basename($sich));
+        return array(true, '', '', $ausblenden ? 'TUNEIN_AUS' : 'TUNEIN_AN');
+    }
+    // sonn antwortet nicht: die Sicherung zurueckspielen. Geht auch, wenn der Container nicht mehr hochkommt (docker cp braucht keinen laufenden Prozess).
+    $schritt('zurueck');
+    if ($ausblenden) {
+        $m['gesperrt'][] = $t['sha'];
+        asn_tunein_merk_schreiben($m);
+    }
+    list($rc, , $err) = asn_docker(array('cp', $sich, $name . ':' . ASN_TUNEIN_DATEI), 60);
+    $r2 = asn_schalten('neustart');
+    $gut = (int) $rc === 0 && $r2[0] && asn_tunein_warten($name, $t['lage']);
+    asn_log('TuneIn-Vorgaben: sonn hat nach der Aenderung nicht geantwortet. Sicherung ' . basename($sich) . ' zurueckgespielt (Rueckgabe ' . (int) $rc . '), sonn '
+        . ($gut ? 'antwortet wieder.' : 'antwortet weiterhin nicht: ' . asn_kurztext(asn_letzte_zeile($err), 160)));
+    return array(false, $gut ? 'TUNEIN_ZURUECK' : 'TUNEIN_ZURUECK_FEHL|' . basename($sich), '', '');
+}
+
+/** Aus dem Takt (jede Minute, sonn hat geantwortet): die Lage melden und die Einstellung nachholen. Aendert selbst nichts, startet nur den Vorgang. */
+function asn_tunein_takt(array $cfg, array $t, array $zonen)
+{
+    if ($t['lage'] === '') {
+        return;
+    }
+    $m = asn_tunein_merk();
+    /* Die Aenderung von Hand vom 01.11.2026 einmal als Einstellung uebernehmen: sie soll ein Neuanlegen ueberstehen. Danach gilt allein, was im Formular steht. */
+    if (empty($cfg['tunein_ausblenden']) && $t['lage'] === 'ausgeblendet' && $t['hand'] && !$m['hand']) {
+        $c2 = asn_config(false);
+        $c2['tunein_ausblenden'] = 1;
+        $m['hand'] = 1;
+        asn_tunein_merk_schreiben($m);
+        if (asn_config_lage() !== 'kaputt' && asn_config_speichern($c2)) {
+            asn_log('TuneIn-Vorgaben: von Hand ausgeblendet vorgefunden - die Einstellung "ausblenden" ist jetzt gesetzt, damit es ein Neuanlegen des Containers uebersteht.');
+        }
+        return;
+    }
+    if (empty($cfg['tunein_ausblenden'])) {
+        asn_log_wenn_neu('tunein', 'ok', 'TuneIn-Vorgaben: Einstellung aus.');
+        return;
+    }
+    if ($t['lage'] === 'unbekannt' || $t['lage'] === 'fehlt') {
+        asn_log_wenn_neu('tunein', $t['lage'] . $t['sha'], 'TuneIn-Vorgaben: Herstellerdatei nicht erkannt (Lage ' . $t['lage'] . ', Summe ' . $t['sha']
+            . ') - nichts geaendert, sonn laeuft unveraendert. Die Vorgabesender bleiben sichtbar, bis das Plugin diese Fassung kennt.');
+        return;
+    }
+    if ($t['lage'] !== 'sichtbar') {
+        asn_log_wenn_neu('tunein', 'ok', 'TuneIn-Vorgaben: ausgeblendet.');
+        return;
+    }
+    if (in_array($t['sha'], $m['gesperrt'], true)) {
+        asn_log_wenn_neu('tunein', 'gesperrt' . $t['sha'], 'TuneIn-Vorgaben: bei dieser Herstellerdatei nach einem Fehlschlag gesperrt - kein neuer Versuch von selbst.');
+        return;
+    }
+    foreach ($zonen as $w) {
+        if (is_array($w) && isset($w['zustand']) && (int) $w['zustand'] === 2) {
+            return;     // nie waehrend einer Wiedergabe neu starten: naechste Minute wieder
+        }
+    }
+    if ($m['sha'] === $t['sha'] && time() - $m['versuch'] < ASN_TUNEIN_PAUSE_S) {
+        return;
+    }
+    list($ok, $g) = asn_vorgang_starten('tunein');
+    if ($ok) {
+        asn_log('TuneIn-Vorgaben: Herstellerzustand vorgefunden (Container neu angelegt?) - Vorgang gestartet, sonn startet einmal neu.');
+    } elseif (strpos((string) $g, 'VORGANG_LAEUFT') !== 0) {
+        asn_log_gebremst('tunein_start', 'TuneIn-Vorgaben: Vorgang liess sich nicht starten (' . asn_grund_text($g) . ').');
+    }
 }
 
 /* ==================================================================
@@ -3686,7 +3975,7 @@ function asn_regeln()
     return array(
         'zahlen'   => array('speicher_mb' => array(256, 8192), 'cpus' => array(1, 8), 'wartezeit' => array(1, 10),
                             'zonen_hoechste' => array(0, ASN_ZONEN_MAX)),
-        'schalter' => array('container_ein', 'mqtt_ein', 'befehle_mqtt_ein', 'steuerung_ein', 'endpunkt_ein'),
+        'schalter' => array('container_ein', 'mqtt_ein', 'befehle_mqtt_ein', 'steuerung_ein', 'endpunkt_ein', 'tunein_ausblenden'),
     );
 }
 

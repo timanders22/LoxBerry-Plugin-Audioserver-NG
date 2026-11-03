@@ -385,6 +385,30 @@ if ($asn_post) {
             }
             break;
 
+        case 'tunein':
+            /* 0.9.3: Vorgabesender von TuneIn. Speichern; weicht die Datei im Container von der Einstellung ab, stellt der Hintergrundvorgang sie um. */
+            $asn_tab = 'tab-settings';
+            $asn_tw = isset($_POST['tunein_ausblenden']) ? 1 : 0;
+            $asn_neu = $asn_cfg;
+            $asn_neu['tunein_ausblenden'] = $asn_tw;
+            if (!asn_config_speichern($asn_neu)) {
+                $asn_misslungen[] = asn_t('EINST.F_SPEICHERN');
+                break;
+            }
+            $asn_meldungen[] = asn_t($asn_tw ? 'TUNEIN.M_EIN' : 'TUNEIN.M_AUS');
+            $asn_tm = asn_tunein_merk();
+            if ($asn_tw && empty($asn_cfg['tunein_ausblenden']) && $asn_tm['gesperrt']) {
+                $asn_tm['gesperrt'] = array();      // der neue Haken ist die Erlaubnis fuer genau einen neuen Versuch
+                asn_tunein_merk_schreiben($asn_tm);
+            }
+            $asn_tl = asn_tunein_stand()['lage'];
+            if ($asn_tw && ($asn_tl === 'unbekannt' || $asn_tl === 'fehlt')) {
+                $asn_misslungen[] = asn_grund_text($asn_tl === 'fehlt' ? 'TUNEIN_FEHLT' : 'TUNEIN_UNBEKANNT');
+            } elseif (($asn_tl === 'sichtbar' && $asn_tw) || ($asn_tl === 'ausgeblendet' && !$asn_tw)) {
+                $asn_vorgang_los('tunein');
+            }
+            break;
+
         case 'sicherung':
             $asn_tab = 'tab-settings';
             $asn_aktion = $asn_wert('aktion');
@@ -853,6 +877,7 @@ $asn_fav_laeuft = $asn_vg['vorgang'] === 'favoriten' && in_array($asn_vg['zustan
 <h2><?= asn_e(asn_t('FAV.H')) ?></h2>
 <p><?= asn_e(asn_t('FAV.TEXT')) ?></p>
 <p class="sm-hilfe"><?= asn_e(asn_t('FAV.H_NUMMER')) ?></p>
+<p class="sm-hilfe"><?= asn_e(asn_t('FAV.H_CUSTOM')) ?></p>
 <p class="sm-hilfe"><?= asn_e(asn_t('FAV.H_LISTE')) ?><?= trim((string) $asn_cfg['musik_pfad']) === '' ? ' ' . asn_e(asn_t('FAV.H_KEIN_MUSIKORDNER')) : '' ?></p>
 <form action="index.php" method="post" autocomplete="off">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
@@ -896,10 +921,39 @@ $asn_fav_laeuft = $asn_vg['vorgang'] === 'favoriten' && in_array($asn_vg['zustan
 <?php foreach ($asn_fav_stand['uebersprungen'] as $asn_fu) { ?>
 <p class="sm-hilfe"><?= asn_e(sprintf(asn_t('FAV.STAND_UEBERSPRUNGEN'), $asn_fu['nr'], asn_grund_text($asn_fu['grund']))) ?></p>
 <?php } ?>
+<?php $asn_fc = asn_custom_satz($asn_fav_stand['custom'], false);
+if ($asn_fc !== '') { ?>
+<p class="sm-hilfe"><?= asn_e($asn_fc) ?></p>
+<?php } ?>
 <?php if ($asn_fav_stand['vorher'] !== '') { ?>
 <p class="sm-hilfe"><?= asn_e(sprintf(asn_t('FAV.STAND_VORHER'), $asn_fav_stand['vorher'])) ?></p>
 <?php } ?>
 <?php } ?>
+</div>
+
+<?php /* 0.9.3: Vorgabesender von TuneIn. Ab Werk aus; der Stand kommt aus dem Takt der letzten Minute. */
+$asn_tu = asn_tunein_stand();
+$asn_tu_laeuft = $asn_vg['vorgang'] === 'tunein' && in_array($asn_vg['zustand'], array('gestartet', 'laeuft'), true); ?>
+<div class="sm-step" id="asn_tunein">
+<h2><?= asn_e(asn_t('TUNEIN.H')) ?></h2>
+<p><?= asn_e(asn_t('TUNEIN.TEXT')) ?></p>
+<?php if ($asn_tu_laeuft) { ?>
+<div class="sm-hinweis"><?= asn_e(asn_vorgang_satz($asn_vg)) ?></div>
+<?php } elseif (!empty($asn_cfg['tunein_ausblenden']) && ($asn_tu['lage'] === 'unbekannt' || $asn_tu['lage'] === 'fehlt')) { ?>
+<div class="sm-warnung"><?= asn_e(asn_grund_text($asn_tu['lage'] === 'fehlt' ? 'TUNEIN_FEHLT' : 'TUNEIN_UNBEKANNT')) ?></div>
+<?php } else { ?>
+<p class="sm-hilfe"><?= asn_e(asn_t('TUNEIN.STAND_' . strtoupper($asn_tu['lage'] !== '' ? $asn_tu['lage'] : 'keiner'))) ?></p>
+<?php } ?>
+<form action="index.php" method="post" autocomplete="off">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
+<input data-role="none" type="hidden" name="fmt" value="<?= asn_e($asn_fmt) ?>">
+<input data-role="none" type="hidden" name="formular" value="tunein">
+<div class="sm-feld"><label><input data-role="none" type="checkbox" name="tunein_ausblenden" value="1"<?= !empty($asn_cfg['tunein_ausblenden']) ? ' checked' : '' ?>> <?= asn_e(asn_t('TUNEIN.HAKEN')) ?></label>
+<p class="sm-hilfe"><?= asn_e(asn_t('TUNEIN.H_NEUSTART')) ?></p></div>
+<div class="sm-knopfreihe">
+<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern" value="1"<?= $asn_tu_laeuft ? ' disabled' : '' ?>><?= asn_e(asn_t('ALLG.K_SPEICHERN')) ?></button>
+</div>
+</form>
 </div>
 
 <?php /* Nachfassung 3: die technischen Felder zugeklappt; offen, wenn eine Eingabe zurueckkommt (Beanstandung oder

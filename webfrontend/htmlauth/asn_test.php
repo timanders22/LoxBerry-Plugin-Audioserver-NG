@@ -299,6 +299,23 @@ function asn_test_docker_zeilen()
         $z[] = array(($ohne || $fz) ? false : ($bekannt === count($zon) ? true : null), asn_t('ZONEN.F_TEST'),
             asn_e((($ohne || $fz) ? asn_zonen_maengel_text($zon) : asn_t($bekannt === count($zon) ? 'ZONEN.A_OK' : 'ZONEN.A_KEINE_AUSSAGE')) . $hinweis));
     }
+    // 0.9.3: Startlautstaerke je Zone (kommt aus Loxone, Parameter Standardlautstaerke/DefVol; sonn meldet sie als volumeLimits). Nur anzeigen und bei wenig warnen.
+    foreach ($zon as $nr => $w) {
+        $st = isset($w['start']) ? (int) $w['start'] : -1;
+        $ho = isset($w['hoechst']) ? (int) $w['hoechst'] : -1;
+        $z[] = array($st < 0 || $st < 20 ? null : true, sprintf(asn_t('TEST.F_START'), $nr, $w['name']), asn_e($st < 0 ? asn_t('ALLG.NICHT_FESTSTELLBAR')
+            : sprintf(asn_t('TEST.A_START'), $st, $ho >= 0 ? (string) $ho : '-') . ($st < 20 ? ' ' . asn_t('TEST.H_START') : '')));
+    }
+    // 0.9.3: TuneIn-Vorgabesender - Lage der Herstellerdatei gegen die Einstellung. Rot nur, wenn die Einstellung an ist und das Plugin sie nicht erfuellen kann.
+    $tu = asn_tunein_normieren(isset($d['tunein']) ? $d['tunein'] : null);
+    $tu_ein = !empty($cfg['tunein_ausblenden']);
+    if ($tu['lage'] === 'unbekannt' || $tu['lage'] === 'fehlt') {
+        $z[] = array($tu_ein ? false : null, asn_t('TEST.F_TUNEIN'), asn_e(asn_grund_text($tu['lage'] === 'fehlt' ? 'TUNEIN_FEHLT' : 'TUNEIN_UNBEKANNT')));
+    } elseif ($tu['lage'] === 'ausgeblendet') {
+        $z[] = array($tu_ein ? true : null, asn_t('TEST.F_TUNEIN'), asn_e(asn_t($tu_ein ? 'TEST.A_TUNEIN_AUS' : 'TEST.A_TUNEIN_AUS_OHNE')));
+    } elseif ($tu['lage'] === 'sichtbar') {
+        $z[] = array($tu_ein ? false : null, asn_t('TEST.F_TUNEIN'), asn_e(asn_t($tu_ein ? 'TEST.A_TUNEIN_NOCH' : 'TEST.A_TUNEIN_WERK')));
+    }
     // 0.9.2 Nachzug: Bibliothek gemessen - Titel der Lokalen Bibliothek und ob der Musikordner dort als Ordner
     // ASN_MUSIK_NAME erscheint (oeffentliche API /api/v1/browse). Nur mit gewaehltem Musikordner.
     if ($sok && $sdef['musik'] !== '') {

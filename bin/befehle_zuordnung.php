@@ -43,7 +43,8 @@ return array(
         return asn_befehle_einstellungen();
     },
     'protokoll' => function ($stufe, $text) {
-        asn_log('Befehlsbruecke: ' . ($stufe === 'INFO' ? '' : $stufe . ' ') . $text);
+        // 0.9.3: bb_log() setzt "Befehlsbruecke: " schon vor den Text - bis 0.9.2 stand es doppelt (Nachzug 01.11.2026, wie MGiSmart 1.1.30).
+        asn_log(($stufe === 'INFO' ? '' : $stufe . ' ') . $text);
     },
     'befehle' => function_exists('asn_befehle') ? array(
         'neustart'   => $asn_eintrag('neustart', 'Audioserver NG Neustart (MQTT)',
