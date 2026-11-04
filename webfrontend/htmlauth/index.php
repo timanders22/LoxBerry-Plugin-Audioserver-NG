@@ -426,6 +426,7 @@ if ($asn_post) {
             $asn_tab = 'tab-settings';
             $asn_aktion = $asn_wert('aktion');
             if ($asn_aktion === 'holen') {
+                while (ob_get_level() > 0) { @ob_end_clean(); }
                 header('Content-Type: application/json; charset=utf-8');
                 header('Content-Disposition: attachment; filename="audioserverng_sicherung_' . date('Ymd_His') . '.json"');
                 echo asn_sicherung_datei();
@@ -496,6 +497,7 @@ if ($asn_post) {
                 $asn_misslungen[] = asn_t('LOX.F_VORLAGE');
                 break;
             }
+            while (ob_get_level() > 0) { @ob_end_clean(); }
             header('Content-Type: application/xml; charset=utf-8');
             header('Content-Disposition: attachment; filename="' . $asn_vname . '"');
             echo $asn_vinhalt;
