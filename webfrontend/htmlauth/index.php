@@ -92,6 +92,19 @@ $asn_vorgang_los = function ($auftrag) use (&$asn_meldungen, &$asn_misslungen) {
 };
 
 /* ---------------- Handler (nur POST mit gueltigem Merkmal; jeder fasst nur seine eigenen Schluessel an) ---------------- */
+/* Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+if ($asn_post && isset($_POST['ansage_test'])) {
+    list($asn_at, $asn_ag) = asn_ansage_test();
+    if ($asn_at) { $asn_meldungen[] = asn_e(asn_t('ANSAGEPLUGIN.M_TEST_OK')); } else { $asn_fehler[] = asn_e(asn_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $asn_ag); }
+    $asn_tab = 'tab-settings';
+}
+if ($asn_post && isset($_POST['ansage_speichern'])) {
+    list($asn_ao, $asn_af, $asn_ah) = asn_ansage_post($_POST);
+    if ($asn_af) { foreach ($asn_af as $asn_ax) { $asn_fehler[] = asn_e($asn_ax); } }
+    elseif ($asn_ao) { $asn_meldungen[] = asn_e(trim(asn_t('ANSAGEPLUGIN.M_OK') . ' ' . implode(' ', $asn_ah))); }
+    else { $asn_fehler[] = asn_e(asn_t('ANSAGEPLUGIN.M_FEHL')); }
+    $asn_tab = 'tab-settings';
+}
 if ($asn_post) {
     $asn_cfg = asn_config();
     switch ($asn_formular) {
@@ -1180,6 +1193,7 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
 </div>
 </form>
 
+<?= asn_ansage_form_html('<input data-role="none" type="hidden" name="fmt" value="' . asn_e($asn_fmt) . '"><input data-role="none" type="hidden" name="activetab" value="tab-settings">') ?>
 <h2><?= asn_e(asn_t('EINST.H_SICHERUNG')) ?></h2>
 <p class="sm-hilfe"><?= asn_e(asn_t('EINST.SICHERUNG_TEXT')) ?></p>
 <div class="sm-knopfreihe">
