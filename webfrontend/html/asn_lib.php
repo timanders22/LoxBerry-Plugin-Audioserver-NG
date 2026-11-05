@@ -49,6 +49,8 @@ define('ASN_PROBE_LABEL', 'de.loxberry.probe');
 define('ASN_PROBE_WERT', 'audio-stufe2');
 define('ASN_VOLL_S', 1800);                   // voller MQTT-Satz alle 30 min, sonst nur Aenderungen
 define('ASN_ABFRAGE_S', 20);                  // Obergrenze einer Abfrage per docker exec
+define('ASN_BEWEIS_RUNDEN', 30);              // 0.9.6 (AS-1): so viele Nachfragen beim Beweis des neuen Containers, je 5 s Abstand
+define('ASN_BEWEIS_SEIT_S', 30);              // 0.9.6 (AS-1): so lange muss er am Stueck laufen, ein Absturz nach 5 s zaehlt nicht
 define('ASN_FAVORITEN_S', 240);              // 0.9.2: Obergrenze fuer das Uebernehmen der Favoriten (alle Zonen)
 define('ASN_FAV_MAX', 99);                   // 0.9.2: Favoriten-Nummern 1 bis 99 (= Eingang Fav in Loxone)
 define('ASN_ZIEHEN_S', 900);                  // Obergrenze fuer docker pull (rund 330 MB gepackt)
@@ -3129,6 +3131,10 @@ function asn_anlegen($schritt, $wechsel)
             $fehler = array('CONTAINER_STEHT', (string) $k2['fehler']);
         }
     }
+    // 0.9.6 (AS-1): nur mit einem Rueckweg gibt es etwas zu verlieren.
+    if ($fehler === null && $alt !== '') {
+        $fehler = asn_start_beweisen($def['container'], $k2);
+    }
     if ($fehler !== null) {
         $verbleib = asn_alt_zurueck($def['container'], $alt, $alt_lief, $fehler[0]);
         /* Rueckfall gescheitert: als Ansage. Zuerst der saubere Zustand: Jedes Scheitern ist ein Ereignis, die Sperre des Stamms bremst Wiederholungen. */
@@ -3161,6 +3167,37 @@ function asn_anlegen($schritt, $wechsel)
         asn_config_speichern($c);
     }
     return array(true, '', '', $wechsel ? 'GEWECHSELT' : 'ANGELEGT');
+}
+
+/**
+ * 0.9.6 (AS-1): laeuft der neue Container wirklich? Bis 0.9.5 stand zwischen "docker start" und dem Entfernen des alten
+ * nur ein inspect: ein Abbild, das nach 5 s abstuerzt, galt als "laeuft", der alte war weg, der Rueckfall kam nicht mehr
+ * dran, und der neue kreiste mit --restart unless-stopped. Bewiesen ist er, wenn sonn auf /api/v1/health antwortet (der
+ * Inhalt zaehlt nicht: "unhealthy" kann an der Einrichtung liegen und galt auch fuer den alten) und er dabei ohne Neustart
+ * mindestens ASN_BEWEIS_SEIT_S laeuft. Rueckgabe null oder array(Grund, Text) fuer den Rueckfall.
+ */
+function asn_start_beweisen($name, &$k2, $warten = 5)
+{
+    $antwort = false;
+    for ($i = 0; $i < ASN_BEWEIS_RUNDEN; $i++) {
+        list($da, $eigen, $k) = asn_container();
+        if ($da !== true || !$eigen) {
+            return array('CONTAINER_FEHLT', '');
+        }
+        if (!$k['laeuft'] || (int) $k['neustarts'] > 0) {
+            return array('CONTAINER_STEHT', (string) $k['fehler']);
+        }
+        $k2 = $k;
+        if (!$antwort) {
+            list($ok, , $d) = asn_sonn_fragen($name, 'stand');
+            $antwort = $ok && isset($d['health']['status']) && (string) $d['health']['status'] !== '';
+        }
+        if ($antwort && (int) $k['seit'] >= ASN_BEWEIS_SEIT_S) {
+            return null;
+        }
+        sleep($warten);
+    }
+    return array('START_OHNE_ANTWORT', '');
 }
 
 /** Stimmt der Container mit den Sollwerten? '' gut, sonst Grund (laeuft, NUR das macvlan-Netz, IP, MAC, Abbild, Musik). */
@@ -4035,7 +4072,7 @@ function asn_sicherung_wert_pruefen($k, $w)
         case 'favoriten_zonen':
             return is_string($w) ? asn_favoriten_zonen_lesen($w)[1] : $text(false);
     }
-    return array(sprintf(asn_t('EINST.SICH_FREMD'), asn_e($k)));
+    return array(sprintf(asn_t('EINST.SICH_FREMD'), $k));     // 0.9.6 (K5): die Ausgabe maskiert
 }
 
 /** Eine Sicherungsdatei einlesen - eine halb gueltige Datei ueberschreibt NICHTS. array(cfg|null, Mangel, Hinweise, Anzahl). */
@@ -4243,6 +4280,8 @@ function asn_ansage_post(array $post)
         return array(false, $t, array());
     }
     $cfg['tts'] = $neu;
+    // 0.9.6: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 0.9.5 ueberschrieb es der naechste Abgleich.
+    $cfg['ansage_token_herkunft'] = ansage_token_herkunft_formular($post, isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array());
     $cfg['ansage_regeln'] = $r;
     $cfg['ansage_haken'] = $hk;
     $t = array();
@@ -4536,7 +4575,7 @@ function asn_sicherung_lesen($roh, $geltend = null)
             continue;
         }
         if (!array_key_exists($k, $neu)) {
-            $mangel[] = sprintf(asn_t('EINST.SICH_FREMD'), asn_e($k));
+            $mangel[] = sprintf(asn_t('EINST.SICH_FREMD'), $k);     // 0.9.6 (K5): die Ausgabe maskiert
             continue;
         }
         $wm = asn_sicherung_wert_pruefen($k, $w);

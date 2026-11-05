@@ -95,14 +95,15 @@ $asn_vorgang_los = function ($auftrag) use (&$asn_meldungen, &$asn_misslungen) {
 /* Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
 if ($asn_post && isset($_POST['ansage_test'])) {
     list($asn_at, $asn_ag) = asn_ansage_test();
-    if ($asn_at) { $asn_meldungen[] = asn_e(asn_t('ANSAGEPLUGIN.M_TEST_OK')); } else { $asn_fehler[] = asn_e(asn_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $asn_ag); }
+    // 0.9.6 (K5): gesammelt wird Klartext, die Ausgabe unten maskiert. Bis 0.9.5 stand ein Apostroph als &#039; auf dem Schirm.
+    if ($asn_at) { $asn_meldungen[] = asn_t('ANSAGEPLUGIN.M_TEST_OK'); } else { $asn_fehler[] = asn_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $asn_ag; }
     $asn_tab = 'tab-settings';
 }
 if ($asn_post && isset($_POST['ansage_speichern'])) {
     list($asn_ao, $asn_af, $asn_ah) = asn_ansage_post($_POST);
-    if ($asn_af) { foreach ($asn_af as $asn_ax) { $asn_fehler[] = asn_e($asn_ax); } }
-    elseif ($asn_ao) { $asn_meldungen[] = asn_e(trim(asn_t('ANSAGEPLUGIN.M_OK') . ' ' . implode(' ', $asn_ah))); }
-    else { $asn_fehler[] = asn_e(asn_t('ANSAGEPLUGIN.M_FEHL')); }
+    if ($asn_af) { foreach ($asn_af as $asn_ax) { $asn_fehler[] = $asn_ax; } }
+    elseif ($asn_ao) { $asn_meldungen[] = trim(asn_t('ANSAGEPLUGIN.M_OK') . ' ' . implode(' ', $asn_ah)); }
+    else { $asn_fehler[] = asn_t('ANSAGEPLUGIN.M_FEHL'); }
     $asn_tab = 'tab-settings';
 }
 if ($asn_post) {

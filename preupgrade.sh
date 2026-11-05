@@ -39,10 +39,10 @@ if ! asn_wurzel_gilt "$BASE"; then
 fi
 if ! asn_wurzel_gilt "$BASE"; then
     echo "<WARNING> Es wurde kein LoxBerry-Wurzelverzeichnis gefunden - nichts gesichert."
-    exit 1
+    exit 2
 fi
 case "$PFOLDER" in
-    ''|*/*|*..*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts getan."; exit 1 ;;
+    ''|*/*|*..*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts getan."; exit 2 ;;
 esac
 MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
 ASN_MARKE_VORHER=0
