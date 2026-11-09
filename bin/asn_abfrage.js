@@ -378,11 +378,15 @@ async function favoriten(ein) {
 // sonn core 4.0.0-beta.22 zeigt ohne TuneIn-Benutzer drei fest eingebaute Sender (DEMO_STATIONS, getLocalStations in tuneinProvider.js); weder API noch Datei
 // schalten sie ab. Geaendert wird genau dieser eine Block und nur, wenn er genau einmal so dasteht wie erwartet und DEMO_STATIONS sonst nur in seiner Definition
 // vorkommt. Alles andere (neue Fassung, andere Zeile) heisst "unbekannt": NICHTS wird geschrieben. Die Aenderung vom 01.11.2026 von Hand gilt als "ausgeblendet".
+// 0.9.8 (09.11.2026): sonn core 4.0.0-beta.23 hat die Vorgabesender selbst entfernt (sonn #427). Am Abbild gemessen: DEMO_STATIONS kommt in der Datei nicht
+// mehr vor, und getLocalStations gibt ohne Benutzer genau "return [];" zurueck (TUNEIN_LEER). Diese Lage heisst "entfallen": es gibt nichts auszublenden,
+// geschrieben wird nichts.
 const TUNEIN_DATEI = '/app/dist/adapters/content/providers/tunein/tuneinProvider.js';
 const TUNEIN_KOPF = '    async getLocalStations() {\n        const username = this.username;\n        if (!username) {\n';
 const TUNEIN_HERSTELLER = TUNEIN_KOPF + '            return DEMO_STATIONS;\n';
 const TUNEIN_PLUGIN = TUNEIN_KOPF + '            return []; // Audioserver NG: Vorgabesender ausgeblendet\n';
 const TUNEIN_HAND = TUNEIN_KOPF + '            return []; // Claude 01.11.2026: Vorgabesender ausgeblendet (Hausherr)\n';
+const TUNEIN_LEER = TUNEIN_KOPF + '            return [];\n';
 function zaehle(t, s) { return t.split(s).length - 1; }
 function tuneinBefund(t) {
   const her = zaehle(t, TUNEIN_HERSTELLER);
@@ -390,9 +394,10 @@ function tuneinBefund(t) {
   const demo = zaehle(t, 'DEMO_STATIONS');
   if (her === 1 && unser === 0 && demo === 2) { return 'sichtbar'; }
   if (her === 0 && unser === 1 && demo === 1) { return 'ausgeblendet'; }
+  if (her === 0 && unser === 0 && demo === 0 && zaehle(t, TUNEIN_LEER) === 1) { return 'entfallen'; }
   return 'unbekannt';
 }
-// Nur lesen. lage: sichtbar | ausgeblendet | unbekannt | fehlt; sha: Anfang der Pruefsumme; hand: die Aenderung von Hand steht drin.
+// Nur lesen. lage: sichtbar | ausgeblendet | entfallen | unbekannt | fehlt; sha: Anfang der Pruefsumme; hand: die Aenderung von Hand steht drin.
 function tuneinLesen() {
   let b;
   try {
@@ -413,6 +418,7 @@ function tuneinAuftrag(ein) {
   const vor = tuneinLesen();
   if (vor.lage === 'fehlt') { return antwort(false, 'TUNEIN_FEHLT'); }
   if (vor.lage === 'unbekannt') { return antwort(false, 'TUNEIN_UNBEKANNT'); }
+  if (vor.lage === 'entfallen') { return antwort(true, '', { geaendert: false }); }   // sonn zeigt selbst keine mehr: nichts zu schreiben
   const soll = ziel === 'ausblenden' ? 'ausgeblendet' : 'sichtbar';
   if (vor.lage === soll) { return antwort(true, '', { geaendert: false }); }
   const tmp = TUNEIN_DATEI + '.asn_neu_' + process.pid;

@@ -238,7 +238,7 @@ function asn_abbild_vorgabe()
     if ($a !== null) {
         return $a;
     }
-    $a = array('repo' => '', 'digest' => '', 'tag' => '', 'datum' => '');
+    $a = array('repo' => '', 'digest' => '', 'tag' => '', 'datum' => '', 'frueher' => array());
     $p = asn_paths();
     $kand = array($p['abbild'], dirname(dirname(__DIR__)) . '/bin/asn_abbild.json');
     foreach ($kand as $k) {
@@ -246,11 +246,42 @@ function asn_abbild_vorgabe()
         if (is_array($d) && isset($d['repo'], $d['digest']) && asn_digest_gueltig($d['digest'])
             && preg_match('#^[a-z0-9.\-]+(/[a-z0-9._\-]+)+\z#', (string) $d['repo'])) {
             $a = array('repo' => $d['repo'], 'digest' => $d['digest'], 'tag' => isset($d['tag']) ? (string) $d['tag'] : '',
-                       'datum' => isset($d['datum']) ? (string) $d['datum'] : '');
+                       'datum' => isset($d['datum']) ? (string) $d['datum'] : '', 'frueher' => array());
+            // 0.9.8: Vorgaben frueherer Fassungen (nur gueltige Digests, nie die aktuelle Vorgabe selbst).
+            if (isset($d['frueher']) && is_array($d['frueher'])) {
+                foreach ($d['frueher'] as $f) {
+                    if (is_array($f) && isset($f['digest']) && asn_digest_gueltig($f['digest']) && $f['digest'] !== $d['digest']) {
+                        $a['frueher'][] = array('digest' => $f['digest'], 'tag' => isset($f['tag']) ? (string) $f['tag'] : '',
+                                                'datum' => isset($f['datum']) ? (string) $f['datum'] : '');
+                    }
+                }
+            }
             break;
         }
     }
     return $a;
+}
+
+/**
+ * 0.9.8: Ist der Container dieser Anlage mit einer FRUEHEREN Vorgabe angelegt worden? Erkannt am Datenordner, den das Anlegen
+ * setzt (daten_<12 Hex des Digests>). Rueckgabe der Eintrag aus 'frueher' oder null. Ohne Datenordner (nie angelegt) gilt nie
+ * eine fruehere Vorgabe - eine neue Anlage bekommt die aktuelle.
+ */
+function asn_abbild_frueher(array $cfg)
+{
+    if (asn_digest_gueltig($cfg['abbild']) || !asn_datenordner_gueltig($cfg['datenordner'])) {
+        return null;
+    }
+    $v = asn_abbild_vorgabe();
+    if ($cfg['datenordner'] === 'daten_' . asn_kurzdigest($v['digest'])) {
+        return null;
+    }
+    foreach ($v['frueher'] as $f) {
+        if ($cfg['datenordner'] === 'daten_' . asn_kurzdigest($f['digest'])) {
+            return $f;
+        }
+    }
+    return null;
 }
 
 function asn_digest_gueltig($d)
@@ -258,10 +289,17 @@ function asn_digest_gueltig($d)
     return is_string($d) && preg_match('/^sha256:[0-9a-f]{64}\z/', $d) === 1;
 }
 
-/** Der Digest, mit dem der Container laufen soll: der eingestellte (nach einem Update mit Ja) oder die Vorgabe. */
+/**
+ * Der Digest, mit dem der Container laufen soll: der eingestellte (nach einem Update mit Ja), sonst die fruehere Vorgabe, mit
+ * der dieser Container angelegt wurde (0.9.8: eine neue Plugin-Fassung stellt nie still ein anderes Abbild ein), sonst die Vorgabe.
+ */
 function asn_abbild_digest(array $cfg)
 {
-    return asn_digest_gueltig($cfg['abbild']) ? $cfg['abbild'] : asn_abbild_vorgabe()['digest'];
+    if (asn_digest_gueltig($cfg['abbild'])) {
+        return $cfg['abbild'];
+    }
+    $f = asn_abbild_frueher($cfg);
+    return $f !== null ? $f['digest'] : asn_abbild_vorgabe()['digest'];
 }
 
 /** repo@digest fuer docker - oder '' (dann ist nichts anzulegen). */
@@ -836,6 +874,21 @@ function asn_labels($info)
     return array();
 }
 
+/**
+ * 0.9.8: Zeitangabe aus docker inspect (State.StartedAt) als Unix-Zeit, false wenn unlesbar. Docker schreibt neun
+ * Nachkommastellen ("2026-11-09T23:00:27.286774526Z"); strtotime() von PHP 7.4 - der Fassung von LoxBerry 3.0 bis 4.0 -
+ * liefert dafuer false, PHP 8.4 nicht (am Geraet und unter 7.4.33/8.4.27 gemessen 10.11.2026). Damit war "seit" immer -1,
+ * der Startnachweis gelang nie, und jedes Update rollte nach 30 Runden zurueck. Die Bruchteile der Sekunde zaehlen hier nicht.
+ */
+function asn_docker_zeit($s)
+{
+    if (!is_string($s) || $s === '' || strpos($s, '0001-01-01') === 0) {
+        return false;   // Docker meldet einen nie gestarteten Container als 0001-01-01T00:00:00Z
+    }
+    $t = strtotime(preg_replace('/(\d{2}:\d{2}:\d{2})\.\d+/', '$1', $s));
+    return ($t !== false && $t > 0) ? $t : false;
+}
+
 /** Kurzfassung eines Containers aus docker inspect (fuer eigenen Container und Probe gleich). */
 function asn_container_kurz(array $info)
 {
@@ -858,7 +911,7 @@ function asn_container_kurz(array $info)
             $mounts[$m['Destination']] = array('quelle' => (string) $m['Source'], 'rw' => !empty($m['RW']));
         }
     }
-    $start = isset($s['StartedAt']) && is_string($s['StartedAt']) ? strtotime($s['StartedAt']) : false;
+    $start = isset($s['StartedAt']) && is_string($s['StartedAt']) ? asn_docker_zeit($s['StartedAt']) : false;
     $l = asn_labels($info);
     return array(
         'id'        => (isset($info['Id']) && is_string($info['Id'])) ? substr($info['Id'], 0, 12) : '',
@@ -3339,7 +3392,7 @@ function asn_rueckweg($schritt)
     $a = array($cfg['abbild'], $cfg['datenordner']);
     $cfg['abbild'] = $cfg['abbild_vorher'];
     $cfg['datenordner'] = $cfg['datenordner_vorher'];
-    $cfg['abbild_vorher'] = asn_digest_gueltig($a[0]) ? $a[0] : asn_abbild_vorgabe()['digest'];
+    $cfg['abbild_vorher'] = asn_digest_gueltig($a[0]) ? $a[0] : asn_abbild_digest($bisher);   // 0.9.8: auch eine fruehere Vorgabe
     $cfg['datenordner_vorher'] = $a[1];
     if (!asn_config_speichern($cfg)) {
         return array(false, 'SCHREIBEN', '', '');
@@ -3660,7 +3713,7 @@ define('ASN_TUNEIN_PAUSE_S', 3600);           // der Takt versucht es bei dersel
 /** Die Lage aus einer Antwort von sonn: array(lage, sha, hand) mit nur bekannten Werten. */
 function asn_tunein_normieren($t)
 {
-    $lage = is_array($t) && isset($t['lage']) && in_array($t['lage'], array('sichtbar', 'ausgeblendet', 'unbekannt', 'fehlt'), true) ? $t['lage'] : '';
+    $lage = is_array($t) && isset($t['lage']) && in_array($t['lage'], array('sichtbar', 'ausgeblendet', 'entfallen', 'unbekannt', 'fehlt'), true) ? $t['lage'] : '';
     $sha = is_array($t) && isset($t['sha']) && is_string($t['sha']) && preg_match('/^[0-9a-f]{16}\z/', $t['sha']) === 1 ? $t['sha'] : '';
     return array('lage' => $lage, 'sha' => $sha, 'hand' => is_array($t) && !empty($t['hand']) ? 1 : 0);
 }
@@ -3753,6 +3806,9 @@ function asn_tunein_vorgang($schritt)
     if ($t['lage'] === $soll) {
         return array(true, '', '', 'TUNEIN_UNVERAENDERT');
     }
+    if ($t['lage'] === 'entfallen') {
+        return array(true, '', '', 'TUNEIN_ENTFALLEN');   // 0.9.8: sonn zeigt selbst keine Vorgabesender mehr (ab beta.23)
+    }
     if ($t['lage'] !== 'sichtbar' && $t['lage'] !== 'ausgeblendet') {
         asn_log('TuneIn-Vorgaben: Herstellerdatei nicht erkannt (Lage ' . ($t['lage'] !== '' ? $t['lage'] : '?') . ', Summe ' . $t['sha'] . ') - nichts geaendert, sonn nicht neu gestartet.');
         return array(false, $t['lage'] === 'fehlt' ? 'TUNEIN_FEHLT' : 'TUNEIN_UNBEKANNT', '', '');
@@ -3800,6 +3856,11 @@ function asn_tunein_vorgang($schritt)
 function asn_tunein_takt(array $cfg, array $t, array $zonen)
 {
     if ($t['lage'] === '') {
+        return;
+    }
+    if ($t['lage'] === 'entfallen') {
+        // 0.9.8: ab sonn core 4.0.0-beta.23 gibt es die Vorgabesender nicht mehr (sonn #427); der Haken hat nichts zu tun, geschrieben wird nichts.
+        asn_log_wenn_neu('tunein', 'entfallen', 'TuneIn-Vorgaben: diese Fassung von sonn zeigt selbst keine Vorgabesender mehr - nichts zu tun, nichts geaendert.');
         return;
     }
     $m = asn_tunein_merk();

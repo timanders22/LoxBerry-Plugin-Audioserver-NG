@@ -1087,8 +1087,13 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
 </details>
 
 <h2><?= asn_e(asn_t('ABBILD.H')) ?></h2>
-<p><?= asn_e(sprintf(asn_t('ABBILD.STAND'), $asn_vgd['repo'], asn_kurzdigest($asn_dig), $asn_dig === $asn_vgd['digest'] ? asn_t('ABBILD.VORGABE') : asn_t('ABBILD.NACH_UPDATE'),
+<?php $asn_vfr = asn_abbild_frueher($asn_cfg);   /* 0.9.8: mit einer frueheren Vorgabe angelegt - bleibt, bis das Update mit Ja kommt */ ?>
+<p><?= asn_e(sprintf(asn_t('ABBILD.STAND'), $asn_vgd['repo'], asn_kurzdigest($asn_dig), $asn_dig === $asn_vgd['digest'] ? asn_t('ABBILD.VORGABE')
+    : ($asn_vfr !== null ? sprintf(asn_t('ABBILD.FRUEHER'), $asn_vfr['tag']) : asn_t('ABBILD.NACH_UPDATE')),
     $asn_vgd['tag'], asn_kurzdigest($asn_vgd['digest']))) ?></p>
+<?php if ($asn_vfr !== null) { ?>
+<div class="sm-hinweis"><?= asn_e(sprintf(asn_t('ABBILD.FRUEHER_HINWEIS'), $asn_vfr['tag'], $asn_vgd['tag'])) ?></div>
+<?php } ?>
 <p class="sm-hilfe"><?= asn_e(asn_t('ABBILD.TEXT')) ?></p>
 <p class="sm-hilfe" id="asn_fassungen"><?= asn_e(asn_t('FASSUNGEN.TEXT')) ?></p>
 <div class="sm-knopfreihe">

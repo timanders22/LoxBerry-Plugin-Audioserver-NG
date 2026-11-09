@@ -145,7 +145,9 @@ function asn_test_zeilen()
     $dig = asn_abbild_digest($cfg);
     $z[] = array($v['digest'] !== '', asn_t('TEST.F_ABBILD_VORGABE'), asn_e($v['digest'] !== ''
         ? sprintf(asn_t('TEST.A_ABBILD_VORGABE'), $v['repo'], asn_kurzdigest($v['digest']), $v['tag'], $v['datum'])
-          . ($dig !== $v['digest'] ? ' ' . sprintf(asn_t('TEST.A_ABBILD_UPDATE'), asn_kurzdigest($dig)) : '')
+          . ($dig !== $v['digest'] ? ' ' . (asn_abbild_frueher($cfg) !== null
+              ? sprintf(asn_t('TEST.A_ABBILD_FRUEHER'), asn_kurzdigest($dig), asn_abbild_frueher($cfg)['tag'])
+              : sprintf(asn_t('TEST.A_ABBILD_UPDATE'), asn_kurzdigest($dig))) : '')
         : asn_t('TEST.A_ABBILD_FEHLT')));
     $v2 = asn_mqtt_v2_haken_lage();
     if ($v2[4] === 'v2') {
@@ -315,6 +317,9 @@ function asn_test_docker_zeilen()
         $z[] = array($tu_ein ? true : null, asn_t('TEST.F_TUNEIN'), asn_e(asn_t($tu_ein ? 'TEST.A_TUNEIN_AUS' : 'TEST.A_TUNEIN_AUS_OHNE')));
     } elseif ($tu['lage'] === 'sichtbar') {
         $z[] = array($tu_ein ? false : null, asn_t('TEST.F_TUNEIN'), asn_e(asn_t($tu_ein ? 'TEST.A_TUNEIN_NOCH' : 'TEST.A_TUNEIN_WERK')));
+    } elseif ($tu['lage'] === 'entfallen') {
+        // 0.9.8: ab sonn core 4.0.0-beta.23 gibt es keine Vorgabesender mehr - das Ziel des Hakens ist ohne Aenderung erreicht.
+        $z[] = array($tu_ein ? true : null, asn_t('TEST.F_TUNEIN'), asn_e(asn_t('TEST.A_TUNEIN_ENTFALLEN')));
     }
     // 0.9.2 Nachzug: Bibliothek gemessen - Titel der Lokalen Bibliothek und ob der Musikordner dort als Ordner
     // ASN_MUSIK_NAME erscheint (oeffentliche API /api/v1/browse). Nur mit gewaehltem Musikordner.
