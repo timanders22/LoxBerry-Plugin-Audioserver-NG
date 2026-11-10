@@ -133,13 +133,30 @@ if command -v docker >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
                 echo "<WARNING> Rest eines frueheren Neuanlegens $R liess sich nicht entfernen - von Hand: docker rm -f $R"
             fi
         done
+        # 0.9.9: Wer haengt noch am eigenen Netz? Bis 0.9.8 zaehlte '{{len .Containers}}' von "network inspect" -
+        # das sind nur LAUFENDE Container. Ein angehaltener Nachbar haelt das Netz nicht fest: Docker entfernt es,
+        # und der Nachbar startet danach nicht mehr. "docker ps -a --filter network=" zaehlt auch angehaltene.
+        # Bauart Alexa NG 1.0.14 (dort am Geraet gemessen 10.11.2026: lb-audioserverng-sonn am Netz von Alexa NG).
+        # Dazu: ein gescheitertes "network rm" blieb bis 0.9.8 stumm (die OK-Zeile hing an "&&") - jetzt nachgesehen.
         if timeout 30 docker network inspect "$NNAME" >/dev/null 2>&1; then
             L=$(asn_labels network "$NNAME")
-            N=$(timeout 30 docker network inspect --format '{{len .Containers}}' "$NNAME" 2>/dev/null)
-            if [ "$L" = "$PFOLDER $LNAME" ] && [ "$N" = "0" ]; then
-                timeout 30 docker network rm "$NNAME" >/dev/null 2>&1 && echo "<OK> Eigenes Netz $NNAME entfernt."
+            if [ "$L" != "$PFOLDER $LNAME" ]; then
+                echo "<INFO> Netz $NNAME traegt nicht die Labels dieses Plugins - es bleibt unberuehrt."
             else
-                echo "<INFO> Netz $NNAME bleibt (fremd oder noch belegt)."
+                NUTZER=$(timeout 30 docker ps -a --no-trunc --filter "network=$NNAME" --format '{{.Names}}' 2>/dev/null); NRC=$?
+                if [ "$NRC" != 0 ]; then
+                    echo "<WARNING> Ob noch ein Container am eigenen Netz $NNAME haengt, liess sich nicht nachsehen (rc $NRC) - es bleibt."
+                    echo "<WARNING> Von Hand: docker ps -a --filter network=$NNAME, und nur wenn das nichts zeigt: docker network rm $NNAME"
+                elif [ -n "$NUTZER" ]; then
+                    echo "<INFO> Eigenes Netz $NNAME bleibt, weil es noch genutzt wird von: $(echo $NUTZER | tr ' ' ',' | sed 's/,/, /g')."
+                else
+                    timeout 30 docker network rm "$NNAME" >/dev/null 2>&1; NRC=$?
+                    if timeout 30 docker network inspect "$NNAME" >/dev/null 2>&1; then
+                        echo "<WARNING> Eigenes Netz $NNAME liess sich nicht entfernen (rc $NRC). Von Hand: docker network rm $NNAME"
+                    else
+                        echo "<OK> Eigenes Netz $NNAME entfernt und nachgesehen."
+                    fi
+                fi
             fi
         fi
         ASN_BILDER=$(timeout 30 docker image ls --format '{{.Repository}}' 2>/dev/null | grep -c '^ghcr\.io/sonn-audio/core$')
