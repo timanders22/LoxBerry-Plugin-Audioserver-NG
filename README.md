@@ -10,13 +10,19 @@ DLNA/UPnP, Snapcast, Sendspin, Squeezelite, Music-Assistant-Player); mit diesem 
 **Amazon Echo wird nicht unterstützt** – sonn core 4.0.0-beta.22 hat keinen Ausgang für Echo/Alexa (Bluetooth nur als
 Eingang). Für Ansagen und Radio auf Echo-Geräten gibt es das Plugin [Alexa NG](https://wiki.loxberry.de/plugins/alexang/start).
 
-Version 0.9.10 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.11 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
 **Stand 0.9.3:** vierte Fassung (0.9.0 bis 0.9.2 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
 gemessen. Gerätetest des Plugins am 31.10./01.11.2026 im Haus (Raspberry Pi 4, zwei Google-Cast-Zonen): Einrichten mit einem
 Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte über das MQTT-Gateway V2 und das sichere
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
+
+---
+
+## Neu in 0.9.11
+
+- **Hilfe, Beispiel der Senderliste:** Platz 9 ist jetzt Deutschlandfunk (`https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3`, am 11.11.2026 gemessen: liefert `audio/mpeg`) statt eines Ortssenders. Am Verhalten des Plugins ändert sich nichts.
 
 ---
 
