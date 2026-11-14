@@ -10,7 +10,7 @@ DLNA/UPnP, Snapcast, Sendspin, Squeezelite, Music-Assistant-Player); mit diesem 
 **Amazon Echo wird nicht unterstützt** – sonn core 4.0.0-beta.22 hat keinen Ausgang für Echo/Alexa (Bluetooth nur als
 Eingang). Für Ansagen und Radio auf Echo-Geräten gibt es das Plugin [Alexa NG](https://wiki.loxberry.de/plugins/alexang/start).
 
-Version 0.9.11 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.12 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
 **Stand 0.9.3:** vierte Fassung (0.9.0 bis 0.9.2 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
@@ -19,6 +19,19 @@ Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
 
 ---
+
+## Neu in 0.9.12
+
+- **Verhalten geändert – Einstellungen sichern und zurückspielen nach der gemeinsamen Vorlage:** Die Knöpfe „Einstellungen sichern“ und „Einstellungen zurückspielen“ arbeiten jetzt mit demselben Sicherungsmodul wie die übrigen Plugins dieser Reihe. Für den Anwender ändert sich:
+  - Die Sicherungsdatei trägt im Kopf das Kennzeichen `LoxBerry-Plugin-Audioserver-NG` (`_plugin`) und die Fassung (`_fassung`). Bis 0.9.11 stand dort „Audioserver NG (<Ordner>)“; Sicherungen mit diesem Kennzeichen werden weiter angenommen. Eine Datei eines anderen Plugins und eine Datei ohne Kennzeichen werden als Ganzes abgewiesen; es ändert sich dann nichts.
+  - Eine Einstellung, die diese Fassung nicht kennt, wird nicht übernommen und mit ihrem Namen gemeldet, nie mit ihrem Wert – oben in der Datei und in den Blöcken (Sprachansagen, Ansageregeln, Haken). Die übrigen Einstellungen werden zurückgespielt. Bis 0.9.11 wies ein unbekannter Name die ganze Datei ab.
+  - Ein leerer Wert in der Sicherung überschreibt keinen bestehenden; der bisherige Wert bleibt, und die Meldung nennt den Namen.
+- Unverändert: Eine Datei mit einem unzulässigen Wert ändert gar nichts, und alle Beanstandungen werden genannt. Aktionstoken und das Konto von sonn gehören in die Datei, die Sprechtoken der Ansageziele nicht. Was ältere Fassungen nicht kannten, behält seinen Wert. Nach dem Zurückspielen zieht die Zweitschrift mit, die Befehlsbrücke wird geschaltet, und die Meldung sagt, dass der Container nicht angefasst wird.
+- **Haken beim Zurückspielen aus dem gemeinsamen Sicherungsmodul:** Der Haken „Ja, die geltenden Einstellungen durch die Sicherung ersetzen“ zwischen dem Feld für die Sicherungsdatei und dem Knopf „Einstellungen zurückspielen“ bleibt Pflicht, ab Werk aus; ohne ihn wird die Datei nicht gelesen und nichts geändert, und die Meldung sagt es. Neu ist, dass Haken, Text und Prüfung samt der Prüfung der hochgeladenen Datei (über das Formular gekommen, höchstens 256 KB) aus dem gemeinsamen Sicherungsmodul 1.1.0 kommen und in allen Plugins dieser Reihe gleich sind; bis 0.9.11 hatte dieses Plugin dafür eigene Texte.
+- **Gemeinsames Sicherungsmodul 1.2.0:** Das Modul kann jetzt, was einzelne Plugins dieser Reihe bisher selbst darum herum gebaut haben (Entscheidung „Einheitlichkeit“). Eine Sicherung von 0.9.11 oder früher mit dem Kennzeichen „Audioserver NG (<Ordner>)“ gilt jetzt für jeden Ordnernamen als eigene, bisher nur für `audioserverng` und den Ordner dieser Anlage.
+- **Gemeinsames Sicherungsmodul 1.2.1:** Ein Vermerk, der nie aus einer Sicherungsdatei kommt (etwa, dass ein Sprechtoken aus einem Nachbar-Plugin übernommen wurde), behält beim Zurückspielen seinen geltenden Wert. An diesem Plugin ändert sich dadurch nichts; es setzte den Vermerk schon bisher selbst wieder ein.
+- **Gemeinsames Sicherungsmodul 1.2.2:** Fehlt eine Einstellung in der Sicherung und setzt das Plugin ihren Wert nach einer eigenen Übergangsregel (etwa aus einer verwandten Einstellung derselben Sicherung), bleibt dieser Wert beim Zurückspielen, und die Meldung nennt ihn als nach einer Übergangsregel abgeleitet – nicht als Werkseinstellung und nicht als bisherigen Wert. An diesem Plugin ändert sich dadurch nichts.
+- Gemessen mit einem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, der über einen Webserver die echten Knöpfe drückt, mit den Sicherungen der Fassungen 0.9.11, 0.9.6 und 0.9.0; am Gerät nicht gemessen.
 
 ## Neu in 0.9.11
 

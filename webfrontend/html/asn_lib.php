@@ -1,5 +1,10 @@
 <?php
 require_once __DIR__ . '/sprachausgabe.php';     // Stamm, fuer die Vorgaben der Sprachansagen schon beim ersten Lesen der Konfiguration
+/* 0.9.12: Das gemeinsame Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Auftrag des Hausherrn
+ * 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den anderen Linien. Es legt beim
+ * Laden nur Funktionen an und antwortet bei direktem Aufruf mit 403. Die Beschreibung dieser Linie steht in
+ * asn_sicherung_beschreibung(). */
+require_once __DIR__ . '/sicherung.php';
 /**
  * Audioserver NG - gemeinsame Bibliothek (Kuerzel asn, Ordner audioserverng).
  *
@@ -4192,47 +4197,11 @@ function asn_ansage_wert($k, $w)
     return false;
 }
 
-/** Fuer die Sicherung: nie ein Sprechtoken, nie der Herkunftsvermerk. Ausgabeart, Ziele, Regeln und Haken reisen mit. */
-function asn_ansage_fuer_sicherung(array $c)
-{
-    unset($c['ansage_token_herkunft'], $c['ansage_aus_datei']);
-    if (isset($c['tts']) && is_array($c['tts'])) { $c['tts'] = ansage_sicherung_bereinigen($c['tts']); }
-    return $c;
-}
-
-/**
- * Vor dem Zurueckspielen. Eine Datei mit Sprechtoken wird abgewiesen (der Block wird unbrauchbar gemacht, die Wertpruefung nennt ihn). Die geltenden Token und der Vermerk bleiben.
- * Fehlt ein Schluessel (Sicherung einer aelteren Fassung), gilt der geltende Wert: Ein bewusstes AUS geht beim Zurueckspielen nicht verloren.
- */
-function asn_ansage_sicherung_vor($roh)
-{
-    $d = json_decode((string) $roh, true);
-    if (!is_array($d)) { return $roh; }
-    $inhalt = false;
-    foreach (array_keys($d) as $k) { if ((string) $k !== '' && ((string) $k)[0] !== '_') { $inhalt = true; } }
-    if (!$inhalt) { return $roh; }
-    $j = asn_ansage_cfg();
-    unset($d['ansage_token_herkunft'], $d['ansage_aus_datei']);
-    $jt = isset($j['tts']) && is_array($j['tts']) ? $j['tts'] : array();
-    if (array_key_exists('tts', $d)) {
-        $g = '';
-        $p = is_array($d['tts']) ? ansage_wert_pruefen($d['tts'], $g, asn_ansage_modi()) : null;
-        if (ansage_sicherung_mangel($d['tts']) || $p === null) {
-            $d['tts'] = 'ABGEWIESEN';
-        } else {
-            list($tv) = ansage_vervollstaendigen($p, 'aus');
-            $d['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
-        }
-    } else {
-        $d['tts'] = asn_tts($j);
-    }
-    foreach (array_diff(asn_ansage_schluessel(), array('tts', 'ansage_token_herkunft', 'ansage_aus_datei')) as $k) {
-        if (!array_key_exists($k, $d) && array_key_exists($k, $j)) { $d[$k] = $j[$k]; }
-    }
-    $d['ansage_token_herkunft'] = isset($j['ansage_token_herkunft']) && is_array($j['ansage_token_herkunft']) ? $j['ansage_token_herkunft'] : array();
-    $d['ansage_aus_datei'] = 1;
-    return (string) json_encode($d);
-}
+/* 0.9.12: asn_ansage_fuer_sicherung() und asn_ansage_sicherung_vor() sind in die Beschreibung fuer das gemeinsame
+ * Sicherungsmodul gewandert (Bauart Beschattung_Fensterbilanz 0.12.32): nie ein Sprechtoken und nie der Herkunftsvermerk
+ * in der Datei ('sichern' und 'nie_aus_datei' in asn_sicherung_beschreibung()), der Block tts vor der Pruefung in
+ * asn_sicherung_vorbehandeln(), fehlende Ansage-Schluessel behalten den geltenden Wert ('fehlt' => 'behalten'), Vermerk
+ * und Herkunft setzt asn_sicherung_beschreibung() in 'vorbereiten' aus dem geltenden Stand. */
 
 /**
  * Die Hauptkonfiguration. Liegt eine ansage.json aus einer Probe vom 01.11., wird sie EINMAL uebernommen (Vermerk ansage_aus_datei) und bleibt liegen.
@@ -4611,77 +4580,112 @@ function asn_ansage_flanke($anlass, $gestoert, $name = '', $frist = 0, $jetzt = 
     return asn_ansage_legen(array($ein));
 }
 
-function asn_sicherung_lesen($roh, $geltend = null)
-{
-    $roh = asn_ansage_sicherung_vor($roh);     // Token und Vermerk bleiben die geltenden
-    $mangel = array();
-    $hinweise = array();
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten) || ($daten && array_keys($daten) === range(0, count($daten) - 1))) {
-        return array(null, array(asn_t('EINST.SICH_KEIN_JSON')), array(), 0);
-    }
-    if (!is_array($geltend)) {
-        $geltend = asn_config(false);
-    }
-    $neu = asn_vorgaben();
-    $anzahl = 0;
-    foreach ($daten as $k => $w) {
-        $k = (string) $k;
-        if (substr($k, 0, 1) === '_') {
-            continue;
-        }
-        $asn_aw = asn_ansage_wert($k, $w);     // Sprachansagen: eigene Pruefung; Token und Vermerk bleiben die geltenden
-        if ($asn_aw !== null) {
-            if ($asn_aw) { $neu[$k] = $w; $anzahl++; } else { $mangel[] = asn_t('ANSAGEPLUGIN.M_FEHL'); $namen[] = (string) $k; }
-            continue;
-        }
-        if (!array_key_exists($k, $neu)) {
-            $mangel[] = sprintf(asn_t('EINST.SICH_FREMD'), $k);     // 0.9.6 (K5): die Ausgabe maskiert
-            continue;
-        }
-        $wm = asn_sicherung_wert_pruefen($k, $w);
-        if ($wm) {
-            $mangel = array_merge($mangel, $wm);
-            continue;
-        }
-        $neu[$k] = $w;
-        $anzahl++;
-    }
-    if ($anzahl === 0 && !$mangel) {
-        $mangel[] = asn_t('EINST.SICH_LEER');
-    }
-    $fehlend = array();
-    foreach (array_keys(asn_vorgaben()) as $fk) {
-        if (array_key_exists($fk, $daten)) {
-            continue;
-        }
-        if (in_array($fk, asn_spaet_schluessel(), true)) {
-            $neu[$fk] = isset($geltend[$fk]) ? $geltend[$fk] : asn_vorgaben()[$fk];
-            $hinweise[] = sprintf(asn_t('EINST.SICH_SPAET'), $fk);
-            continue;
-        }
-        $fehlend[] = $fk;
-    }
-    if ($fehlend) {
-        $mangel[] = sprintf(asn_t('EINST.SICH_FEHLEND'), count($fehlend), implode(', ', $fehlend));
-    }
-    return array($mangel ? null : $neu, $mangel, $hinweise, $anzahl);
-}
-
-function asn_sicherung_datei()
+/**
+ * 0.9.12: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul (sicherung.php).
+ *
+ * Kennzeichen: bis 0.9.11 schrieb der Sichern-Knopf _plugin = "Audioserver NG (<Ordner>)" (gemessen 12.11.2026 an
+ * 0.9.0 bis 0.9.11). Das traegt Leerzeichen und Klammern und ist keine Namensform, die das Modul als Kennzeichen
+ * annimmt (/^[A-Za-z0-9_.\-]{1,80}\z/); es haengt zudem am Ordner der Anlage. Neu ist deshalb der Name des
+ * Repositorys, LoxBerry-Plugin-Audioserver-NG; die bisherige Form gilt als frueheres Kennzeichen derselben Linie
+ * (mit dem Ordner audioserverng ab Werk und mit dem Ordner dieser Anlage).
+ *
+ * Inhalt: alle Schluessel von asn_vorgaben() samt Aktionstoken und Zugangsdaten des sonn-Kontos (sonn_benutzer,
+ * sonn_kennwort). Nie darin: die Sprechtoken im Block tts ('sichern' => ansage_sicherung_bereinigen) und die
+ * Vermerke ansage_token_herkunft, ansage_aus_datei ('nie_aus_datei'); ein Sprechtoken dieser Linie selbst gibt es
+ * nicht. Fehlen darf, was aeltere Fassungen nicht kannten (asn_spaet_schluessel(), seit 0.9.4 die Ansage-Schluessel):
+ * dann bleibt der geltende Wert, wie bis 0.9.11. Jeder Wert geht durch asn_sicherung_wert_pruefen() bzw.
+ * asn_ansage_wert(), wie im Formular.
+ */
+function asn_sicherung_beschreibung()
 {
     $p = asn_paths();
-    $kopf = array(
-        '_plugin'  => 'Audioserver NG (' . $p['plugin'] . ')',
-        '_stand'   => (asn_fassung() !== '' ? asn_fassung() : 'unbekannt') . ', ' . date('Y-m-d H:i:s'),
-        '_hinweis' => asn_klartext('EINST.SICH_KOPF_HINWEIS'),
+    $tts = array_merge(array_keys(ansage_werk_block()), ansage_geheim());
+    $schluessel = array(
+        'tts' => sicherung_block($tts, array('ziele' => sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'))))
+                 + array('fehlt' => 'behalten', 'sichern' => 'ansage_sicherung_bereinigen'),
+        'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())) + array('fehlt' => 'behalten'),
+        'ansage_haken' => sicherung_block(array('sonn', 'ruecksprung')) + array('fehlt' => 'behalten'),
     );
-    $cfg = asn_config();
-    $daten = array();
-    foreach (array_keys(asn_vorgaben()) as $k) {
-        $daten[$k] = $cfg[$k];
+    foreach (asn_spaet_schluessel() as $s) {
+        $schluessel[$s] = array('fehlt' => 'behalten');
     }
-    return json_encode($kopf + asn_ansage_fuer_sicherung($daten), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);     // nie ein Sprechtoken
+    return array(
+        'kennzeichen' => 'LoxBerry-Plugin-Audioserver-NG',
+        /* Bis 0.9.11 hiess das Kennzeichen "Audioserver NG (<Ordner>)" - seit Modul 1.2.0 ueber ein Muster, so
+         * dass auch die Sicherung einer Anlage mit anderem Ordner als eigene gilt (bis zur Umstellung nur der
+         * Ordner audioserverng und der eigene). */
+        'kennzeichen_frueher_muster' => '/^Audioserver NG \([A-Za-z0-9_.\-]{1,64}\)\z/',
+        'hinweis' => asn_klartext('EINST.SICH_KOPF_HINWEIS'),
+        'fassung' => 'asn_fassung',
+        'vorgaben' => asn_vorgaben(),
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('ansage_token_herkunft', 'ansage_aus_datei'),
+        'pruefen' => function ($k, $w) {
+            $aw = asn_ansage_wert($k, $w);
+            if ($aw !== null) { return $aw ? '' : asn_t('ANSAGEPLUGIN.M_FEHL') . ' (' . $k . ')'; }
+            return asn_sicherung_wert_pruefen($k, $w);     // Liste der Beanstandungen, leer = in Ordnung
+        },
+        'vorbehandeln' => 'asn_sicherung_vorbehandeln',
+        'jetzt' => function () { return asn_config(false); },
+        'vorbereiten' => function ($neu) {
+            /* Herkunft der Sprechtoken und der Vermerk ansage_aus_datei kommen nie aus der Datei (wie bis 0.9.11). */
+            $j = asn_ansage_cfg();
+            $neu['ansage_token_herkunft'] = isset($j['ansage_token_herkunft']) && is_array($j['ansage_token_herkunft'])
+                ? $j['ansage_token_herkunft'] : array();
+            $neu['ansage_aus_datei'] = 1;
+            return $neu;
+        },
+        'speichern' => function ($neu) { return asn_config_speichern($neu); },
+        'zweitschrift' => function () { $q = asn_paths(); return array($q['config'], $q['sicherung']); },
+        'nachziehen' => function ($neu) {
+            /* Den Dienst nachziehen und sagen, was mit ihm geschah (Regeln/05): die Befehlsbruecke wird sofort
+             * geschaltet (wie bis 0.9.11); der Container wird nicht angefasst, der Minutentakt liest die
+             * zurueckgespielten Einstellungen beim naechsten Lauf. */
+            $h = array(asn_t('EINST.SICH_DIENST'));
+            if (asn_merk()['angelegt']) {
+                $h[] = asn_t('EINST.H_NEU_ANLEGEN');
+            }
+            list($brc, $bw) = asn_bruecke_schalten($neu);
+            if ($bw !== '') {
+                $h[] = sprintf(asn_t('MQTT.M_BRUECKE'), $bw, $brc === 0 ? asn_t('ALLG.JA') : asn_t('ALLG.NEIN'));
+            }
+            return $h;
+        },
+        'log' => 'asn_log',
+        't' => 'asn_t',
+        // Die Seite maskiert jede Meldung bei der Ausgabe (asn_e); hier nicht ein zweites Mal.
+        'e' => function ($s) { return (string) $s; },
+        'home' => $p['home'],
+        'ordner' => $p['plugin'],
+    );
+}
+
+/**
+ * 0.9.12: Der Block tts vor der Pruefung - was bis 0.9.11 asn_ansage_sicherung_vor() an der rohen Datei tat, jetzt
+ * nach dem Verwerfen unbekannter Unterschluessel: ein Block mit Sprechtoken oder mit einem unzulaessigen Wert wird
+ * unbrauchbar gemacht (die Wertpruefung nennt ihn), sonst vervollstaendigt, und die geltenden Sprechtoken bleiben.
+ * Fehlt der Block, behaelt das Modul den geltenden ('fehlt' => 'behalten').
+ */
+function asn_sicherung_vorbehandeln($bereit)
+{
+    if (!array_key_exists('tts', $bereit)) { return $bereit; }
+    $j = asn_ansage_cfg();
+    $jt = isset($j['tts']) && is_array($j['tts']) ? $j['tts'] : array();
+    $g = '';
+    $p = is_array($bereit['tts']) ? ansage_wert_pruefen($bereit['tts'], $g, asn_ansage_modi()) : null;
+    if (!is_array($bereit['tts']) || ansage_sicherung_mangel($bereit['tts']) || $p === null) {
+        $bereit['tts'] = 'ABGEWIESEN';
+    } else {
+        list($tv) = ansage_vervollstaendigen($p, 'aus');
+        $bereit['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
+    }
+    return $bereit;
+}
+
+/** Die Sicherungsdatei (0.9.12: gebaut vom gemeinsamen Modul); '' wenn sie sich nicht bilden laesst. */
+function asn_sicherung_datei()
+{
+    return sicherung_json(sicherung_bauen(asn_sicherung_beschreibung(), asn_config()));
 }
 
 function asn_einmal_schreiben($meldungen, $fehler, $test, $hinweise = array(), $zusatz = null)

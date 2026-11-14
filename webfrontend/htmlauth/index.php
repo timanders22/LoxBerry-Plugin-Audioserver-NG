@@ -425,46 +425,47 @@ if ($asn_post) {
 
         case 'sicherung':
             $asn_tab = 'tab-settings';
-            $asn_aktion = $asn_wert('aktion');
+            /* 0.9.12: die beiden Knoepfe tragen eigene Namen (asn_sichern, asn_zurueck) wie in den anderen Linien;
+             * das Feld aktion gilt weiter. */
+            $asn_aktion = isset($_POST['asn_sichern']) ? 'holen' : (isset($_POST['asn_zurueck']) ? 'zurueck' : $asn_wert('aktion'));
             if ($asn_aktion === 'holen') {
+                $asn_js = asn_sicherung_datei();
+                if ($asn_js === '') {
+                    $asn_misslungen[] = asn_t('EINST.SICH_SCHREIBFEHLER');
+                    break;
+                }
                 while (ob_get_level() > 0) { @ob_end_clean(); }
                 header('Content-Type: application/json; charset=utf-8');
                 header('Content-Disposition: attachment; filename="audioserverng_sicherung_' . date('Ymd_His') . '.json"');
-                echo asn_sicherung_datei();
+                echo $asn_js;
                 exit;
             }
             if ($asn_aktion !== 'zurueck') {
                 $asn_misslungen[] = asn_t('ALLG.FORMULAR_UNBEKANNT');
                 break;
             }
-            if (!isset($_POST['zurueck_ok'])) {
-                $asn_misslungen[] = asn_t('EINST.SICH_HAKEN');
+            /* 0.9.12: Haken, hochgeladene Datei und Groessengrenze prueft das gemeinsame Sicherungsmodul
+             * (sicherung_eingang(), Modul 1.1.0, Entscheidung des Hausherrn 12.11.2026) - in jeder Linie gleich; der
+             * Haken zurueck_ok und sein Text kommen seither aus dem Modul (bis 0.9.11 eigene Texte der Linie).
+             * Ohne Haken wird nichts gelesen und nichts geaendert. */
+            list($asn_ein_roh, $asn_ein_ab) = sicherung_eingang(asn_sicherung_beschreibung(), $_POST, $_FILES, 'sicherung');
+            if ($asn_ein_ab !== null) {
+                $asn_ein_m = sicherung_meldungen(asn_sicherung_beschreibung(), $asn_ein_ab);
+                foreach ($asn_ein_m['fehler'] as $asn_ein_x) { $asn_misslungen[] = $asn_ein_x; }
                 break;
             }
-            if (!isset($_FILES['sicherung']['tmp_name']) || !is_string($_FILES['sicherung']['tmp_name'])
-                || !@is_uploaded_file($_FILES['sicherung']['tmp_name'])) {
-                $asn_misslungen[] = asn_t('EINST.SICH_KEINE_DATEI');
-                break;
-            }
-            if ((int) $_FILES['sicherung']['size'] > 262144) {
-                $asn_misslungen[] = asn_t('EINST.SICH_ZU_GROSS');
-                break;
-            }
-            list($asn_neu, $asn_mangel, $asn_sh, $asn_n) = asn_sicherung_lesen((string) @file_get_contents($_FILES['sicherung']['tmp_name']), $asn_cfg);
-            if ($asn_neu === null) {
-                $asn_fehler[] = asn_t('EINST.SICH_ABGELEHNT');
-                $asn_fehler = array_merge($asn_fehler, $asn_mangel);
-                break;
-            }
-            if (asn_config_speichern($asn_neu)) {
-                $asn_meldungen[] = sprintf(asn_t('EINST.SICH_UEBERNOMMEN'), $asn_n);
-                $asn_hinweise = array_merge($asn_hinweise, $asn_sh);
-                list($asn_brc, $asn_bw) = asn_bruecke_schalten($asn_neu);
-                if ($asn_bw !== '') {
-                    $asn_hinweise[] = sprintf(asn_t('MQTT.M_BRUECKE'), $asn_bw, $asn_brc === 0 ? asn_t('ALLG.JA') : asn_t('ALLG.NEIN'));
-                }
+            /* 0.9.12: das gemeinsame Sicherungsmodul liest und prueft (Kennzeichen, jeder Wert), verwirft Unbekanntes
+             * mit Namen, laesst bei einem leeren Wert den bisherigen stehen, aendert bei einer Beanstandung GAR
+             * NICHTS, speichert samt Zweitschrift, misst sie nach und sagt, was mit dem Dienst geschah
+             * (asn_sicherung_beschreibung()). */
+            $asn_b = asn_sicherung_beschreibung();
+            $asn_r = sicherung_zurueckspielen($asn_b, $asn_ein_roh);
+            $asn_m = sicherung_meldungen($asn_b, $asn_r);
+            if (!$asn_r['ok']) {
+                $asn_fehler = array_merge($asn_fehler, $asn_m['fehler']);
             } else {
-                $asn_misslungen[] = asn_t('EINST.F_SPEICHERN');
+                $asn_misslungen = array_merge($asn_misslungen, $asn_m['fehler']);
+                $asn_meldungen = array_merge($asn_meldungen, $asn_m['hinweise']);
             }
             break;
 
@@ -1209,7 +1210,7 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="fmt" value="<?= asn_e($asn_fmt) ?>">
     <input data-role="none" type="hidden" name="formular" value="sicherung">
-    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="aktion" value="holen"><?= asn_e(asn_t('EINST.K_SICHERUNG')) ?></button>
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="asn_sichern" value="1"><?= asn_e(asn_t('EINST.K_SICHERUNG')) ?></button>
   </form>
 </div>
 <form action="index.php" method="post" enctype="multipart/form-data">
@@ -1218,9 +1219,9 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
 <input data-role="none" type="hidden" name="formular" value="sicherung">
 <div class="sm-feld"><label for="sicherung"><?= asn_e(asn_t('EINST.L_ZURUECK')) ?></label>
 <input data-role="none" type="file" id="sicherung" name="sicherung" accept=".json,application/json"></div>
-<div class="sm-feld"><label><input data-role="none" type="checkbox" name="zurueck_ok" value="1"> <?= asn_e(asn_t('EINST.ZURUECK_HAKEN')) ?></label></div>
+<?= sicherung_haken_zeile(asn_sicherung_beschreibung()) ?>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="zurueck"><?= asn_e(asn_t('EINST.K_ZURUECK')) ?></button>
+<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="asn_zurueck" value="1"><?= asn_e(asn_t('EINST.K_ZURUECK')) ?></button>
 </div>
 </form>
 </div>
