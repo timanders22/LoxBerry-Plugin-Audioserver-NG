@@ -10,7 +10,7 @@ DLNA/UPnP, Snapcast, Sendspin, Squeezelite, Music-Assistant-Player); mit diesem 
 **Amazon Echo wird nicht unterstützt** – sonn core 4.0.0-beta.22 hat keinen Ausgang für Echo/Alexa (Bluetooth nur als
 Eingang). Für Ansagen und Radio auf Echo-Geräten gibt es das Plugin [Alexa NG](https://wiki.loxberry.de/plugins/alexang/start).
 
-Version 0.9.12 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.13 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
 **Stand 0.9.3:** vierte Fassung (0.9.0 bis 0.9.2 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
@@ -19,6 +19,37 @@ Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
 
 ---
+
+## Neu in 0.9.13
+
+- **sonn core 4.0.0-beta.24 ist die neue Vorgabe** (Digest `sha256:7a99016f…`, gleich den Tags `beta` und `beta-latest`
+  am 15.11.2026; das Abbild ist am 15.11.2026 erstellt). Eine **neue** Einrichtung legt den Container damit an.
+- **Eine bestehende Anlage wird nicht still umgestellt.** Ein Container, der mit der Vorgabe beta.23 oder beta.22 angelegt
+  wurde, läuft nach dem Plugin-Update unverändert weiter; ebenso einer, dessen Abbild mit einem Update mit Ja gewählt
+  wurde. beta.24 steht unter „Verfügbare Fassungen auf ghcr.io anzeigen“ und wird erst mit Haken und Ja übernommen (die
+  Daten werden kopiert, der Rückweg bleibt).
+- **Drei an sonn gemeldete Grenzen sind in beta.24 behoben** – gelesen im Quelltext des Tags `v4.0.0-beta.24` und in der
+  übersetzten Fassung im Abbild (arm64), mit diesem Plugin am Gerät noch nicht gemessen: der stumme Titelwechsel auf
+  Google Cast (sonn #431), `.mp4`- und `.m4b`-Dateien in der Bibliothek (sonn #432) und die nach einem Neustart in der
+  App unsichtbare Gruppe (sonn #433). Bis zum Update auf beta.24 gelten sie weiter; siehe „Grenzen“.
+- **TuneIn-Vorgabesender:** Die Datei von sonn, die der Haken betrifft, ist in beta.24 byte-gleich mit beta.23 (im Abbild
+  gemessen). Das Plugin meldet weiter „nichts zu tun“ und ändert nichts.
+- Was beta.24 sonst ändert (Tidal ohne Music Assistant, Apple Music und Amazon Music im Container, Sonos, feste Gruppen
+  von Loxone, viele Funktionen der Loxone App; nach den Release-Hinweisen warnt Loxone Config 17.3 nicht mehr vor einem
+  veralteten Audioserver, sonn #436), steht in den Release-Hinweisen von sonn; mit diesem Plugin nicht gemessen.
+- **Gemeinsames Sicherungsmodul 1.2.6 (bisher 1.2.2), „Einstellungen zurückspielen“:**
+  - Eine Einstellung, die in den geltenden Einstellungen steht, dieser Fassung aber unbekannt ist (etwa nach einer
+    Bearbeitung von Hand), fällt beim Zurückspielen weiter weg, wird jetzt aber in der Meldung und im Protokoll mit ihrem
+    Namen genannt, nie mit ihrem Wert. Bis 0.9.12 fiel sie ohne Meldung weg (oben und im Block der Sprachansagen
+    gemessen). Jede unbekannte Einstellung wird genau einmal genannt.
+  - Eine Sicherungsdatei mit UTF-8-BOM am Anfang (wie sie manche Editoren unter Windows schreiben) wird gelesen; bis
+    0.9.12 wurde sie als „keine lesbare Sicherung“ abgewiesen.
+  - Die übrigen Neuerungen des Moduls (Sicherungen mit Hülle) betreffen dieses Plugin nicht. Gemessen mit dem
+    Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, der über einen Webserver die echten Knöpfe drückt, auch mit
+    den Sicherungen aller früheren Fassungen; am Gerät nicht gemessen.
+- Am Plugin selbst ändern sich die Vorgabe des Abbilds (`bin/asn_abbild.json`, beta.23 jetzt unter den früheren
+  Vorgaben), das Sicherungsmodul (`webfrontend/html/sicherung.php` und der Abschnitt `[SICHERUNG]` der Sprachdateien)
+  und diese Beschreibung.
 
 ## Neu in 0.9.12
 
@@ -286,17 +317,22 @@ als Audioserver; nicht gemessen).
   Test sagt das bei einem Wiedergabefehler dazu. Das Plugin startet sonn deshalb **nicht** selbst neu. Ab beta.23 wählt
   sonn den Lautsprecher nach seinen Release-Hinweisen beim nächsten Abspielen neu an (sonn #424, mit diesem Plugin noch
   nicht gemessen).
-- **Titelwechsel auf Google Cast bleibt still (beta.22 und beta.23):** Wer in der App während der Wiedergabe einen anderen
-  Titel antippt, sieht ihn als laufend, hört aber nichts; Pause und Play lassen ihn hören. Ursache in sonn: ein überholter
-  zweiter Ladeversuch des alten Titels überschreibt am Lautsprecher den neuen (am Gerät gemessen 08.11.2026, gemeldet als
-  sonn #431).
-- **`.mp4`-Dateien fehlen in der Bibliothek:** sonn liest nur `.mp3`, `.flac`, `.m4a`, `.aac`, `.ogg` und `.wav` ein. Bei
-  Musikvideos mit AAC-Ton hilft es, die Tonspur ohne neue Kodierung als `.m4a` daneben abzulegen
-  (`ffmpeg -i X.mp4 -vn -c:a copy X.m4a`), danach die Bibliothek neu einlesen (gemeldet als sonn #432).
-- **Eine gespeicherte Zonengruppe kann in der App unsichtbar sein:** sonn hält eine in der App gebildete Gruppe über
-  Neustarts fest und wendet sie an, meldet sie einer neu verbundenen App aber nicht („Keine Gruppe verfügbar“). Folgt eine
-  Zone ungewollt einer anderen: die Gruppe in der App mit beiden Zonen neu bilden und sofort wieder auflösen (am Gerät
-  gemessen 08./09.11.2026, gemeldet als sonn #433).
+- **Titelwechsel auf Google Cast bleibt still (beta.22 und beta.23; in beta.24 behoben):** Wer in der App während der
+  Wiedergabe einen anderen Titel antippt, sieht ihn als laufend, hört aber nichts; Pause und Play lassen ihn hören.
+  Ursache in sonn: ein überholter zweiter Ladeversuch des alten Titels überschreibt am Lautsprecher den neuen (am Gerät
+  gemessen 08.11.2026, gemeldet als sonn #431). beta.24 erkennt einen überholten Ladeversuch und wiederholt ihn nicht
+  (`googleCastOutput.ts`, im Quelltext und im Abbild gelesen; mit diesem Plugin am Gerät nicht gemessen).
+- **`.mp4`-Dateien fehlen in der Bibliothek (bis beta.23; in beta.24 behoben):** sonn bis beta.23 liest nur `.mp3`,
+  `.flac`, `.m4a`, `.aac`, `.ogg` und `.wav` ein. Bei Musikvideos mit AAC-Ton hilft es dort, die Tonspur ohne neue
+  Kodierung als `.m4a` daneben abzulegen (`ffmpeg -i X.mp4 -vn -c:a copy X.m4a`), danach die Bibliothek neu einlesen
+  (gemeldet als sonn #432). beta.24 liest auch `.mp4` und `.m4b` ein, eine `.mp4` aber nur, wenn sie eine Tonspur hat
+  (`libraryAudioFiles.ts`, im Quelltext und im Abbild gelesen; am Gerät nicht gemessen).
+- **Eine gespeicherte Zonengruppe kann in der App unsichtbar sein (bis beta.23; in beta.24 behoben):** sonn hält eine in
+  der App gebildete Gruppe über Neustarts fest und wendet sie an, meldet sie einer neu verbundenen App aber nicht („Keine
+  Gruppe verfügbar“). Folgt eine Zone ungewollt einer anderen: die Gruppe in der App mit beiden Zonen neu bilden und
+  sofort wieder auflösen (am Gerät gemessen 08./09.11.2026, gemeldet als sonn #433). beta.24 schickt einer App beim
+  Verbinden die bestehenden Gruppen mit (`audio_sync_event` in `loxoneHttpService.ts`, im Quelltext und im Abbild
+  gelesen; am Gerät nicht gemessen).
 - **Google-Lautsprechergruppen sind in sonn nicht als Ausgang wählbar.** Mehrraum und Klingel über Google-Gruppen
   macht das Plugin **Chromecast4lox**. Hier gilt: eine Zone je Raum.
 - sonn core ist eine **Beta** mit einem Hauptentwickler. Jede Fassung von Loxone oder sonn kann die Kopplung kurz
