@@ -60,6 +60,11 @@ define('ASN_FAVORITEN_S', 240);              // 0.9.2: Obergrenze fuer das Ueber
 define('ASN_FAV_MAX', 99);                   // 0.9.2: Favoriten-Nummern 1 bis 99 (= Eingang Fav in Loxone)
 define('ASN_ZIEHEN_S', 900);                  // Obergrenze fuer docker pull (rund 330 MB gepackt)
 define('ASN_KOPIE_S', 600);                   // Obergrenze fuer das Kopieren eines Datenordners
+// 0.9.14: Fortschrittsanzeige. Ein Update braucht hoechstens rund 30 min (Ziehen 900 s, Kopie 600 s, Beweis 30 x 5 s,
+// dazu Anhalten und Anlegen); laeuft ein lebender Vorgang laenger, warnt die Anzeige. Ein beendeter Vorgang bleibt
+// 15 min als Kasten oben im Reiter Einstellungen stehen (danach nur noch in der Kopfzeile "Letzter Vorgang").
+define('ASN_VORGANG_LANG_S', 2400);
+define('ASN_VORGANG_ZEIGEN_S', 900);
 define('ASN_TAKT_GRENZE', 180);               // Takt-Lebenszeichen gilt bis 3 min
 define('ASN_RAM_WARNUNG_MB', 500);            // Abbruchbedingung der Probe: unter 500 MB verfuegbar
 define('ASN_LOG_MAX', 262144);
@@ -453,12 +458,33 @@ function asn_config($heilen = true)
     return array_merge(asn_vorgaben(), is_array($daten) ? $daten : array());
 }
 
-function asn_config_speichern($cfg)
+/**
+ * Die Konfiguration schreiben: erst die Schluessel der Vorgaben (fehlt einer in $cfg, seine Vorgabe), dann jede
+ * Einstellung aus $cfg, die diese Fassung nicht kennt, unveraendert dahinter.
+ * 0.9.14 (Entscheidung des Hausherrn 15.11.2026, Regeln/05 "fremd -> NENNEN, stehen lassen"): bis 0.9.13 schrieb die
+ * Funktion nur die Vorgabeschluessel - jedes Speichern, auch das selbsttaetige Vervollstaendigen in asn_token(), entfernte
+ * eine unbekannte Einstellung still. "Einstellungen zurueckspielen" speichert weiter genau den Stand, den das
+ * Sicherungsmodul liefert (Bauform, Entscheidung 2): das Modul uebergibt ihn ohne unbekannte Schluessel und nennt die
+ * weggefallenen Namen (Pruefstand, Zeile geltend.fremd). $ziel: nur diese Datei schreiben, ohne Zweitschrift (Probe im
+ * Reiter Test).
+ */
+function asn_config_speichern($cfg, $ziel = null)
 {
     $p = asn_paths();
     $neu = array();
-    foreach (array_keys(asn_vorgaben()) as $k) {
-        $neu[$k] = isset($cfg[$k]) ? $cfg[$k] : asn_vorgaben()[$k];
+    $vorgaben = asn_vorgaben();
+    foreach (array_keys($vorgaben) as $k) {
+        $neu[$k] = isset($cfg[$k]) ? $cfg[$k] : $vorgaben[$k];
+    }
+    if (is_array($cfg)) {
+        foreach ($cfg as $k => $w) {
+            if (!array_key_exists($k, $vorgaben)) {
+                $neu[$k] = $w;
+            }
+        }
+    }
+    if ($ziel !== null) {
+        return asn_json_schreiben($ziel, $neu, 0600);
     }
     if (!asn_json_schreiben($p['config'], $neu, 0600)) {
         return false;
@@ -495,11 +521,120 @@ function asn_token()
     if (trim((string) $cfg['aktionstoken']) === '') {
         $cfg['aktionstoken'] = asn_token_erzeugen();
         asn_config_speichern($cfg);
-    } elseif (array_diff_key(asn_vorgaben(), asn_json_lesen(asn_paths()['config']))) {
+    } else {
         // 0.9.3: nach einem Update fehlen neue Schluessel; die Konfiguration wird beim Oeffnen der Seite vervollstaendigt (sonst ist die Zeile im Reiter Test rot, bis jemand speichert).
-        asn_config_speichern($cfg);
+        // 0.9.14: ueber asn_config_vervollstaendigen() - Unbekanntes bleibt stehen und steht mit Namen in der Protokollzeile.
+        asn_config_vervollstaendigen();
     }
     return (string) $cfg['aktionstoken'];
+}
+
+/** 0.9.14: Ein Schluesselname fuer Meldung und Protokoll - dieselbe Regel wie sicherung_name() des Sicherungsmoduls. */
+function asn_name_text($n)
+{
+    if (function_exists('sicherung_name')) {
+        return sicherung_name($n);
+    }
+    $n = (string) preg_replace('/[^A-Za-z0-9_.\-\[\]]/', '?', (string) $n);
+    if ($n === '') {
+        $n = '?';
+    }
+    return strlen($n) > 64 ? substr($n, 0, 64) . '...' : $n;
+}
+
+/** 0.9.14: Die Einstellungen einer Konfiguration (Feld), die diese Fassung nicht kennt - nur Namen, sortiert. */
+function asn_config_fremd(array $roh)
+{
+    $aus = array();
+    foreach (array_keys($roh) as $k) {
+        if (!array_key_exists($k, asn_vorgaben())) {
+            $aus[] = asn_name_text($k);
+        }
+    }
+    sort($aus);
+    return $aus;
+}
+
+/**
+ * 0.9.14 (Entscheidung des Hausherrn 15.11.2026, "nennen und stehen lassen"; Bauart GardenaSmartSystem 1.2.30): die
+ * Konfiguration vervollstaendigen. Fehlende Schluessel werden mit ihrer Vorgabe nachgetragen; eine Einstellung, die
+ * diese Fassung nicht kennt, bleibt unveraendert stehen und wird im Satz mit Namen genannt, nie mit Wert. Ein Knopf
+ * dafuer gibt es nicht: vervollstaendigt wird beim Oeffnen der Oberflaeche (asn_token()), gemeldet in der Protokollzeile,
+ * die nur entsteht, wenn etwas nachgetragen wird. $datei: eine andere Datei (Probe im Reiter Test, ohne Zweitschrift);
+ * $protokoll = false schreibt keine Protokollzeile. Eine leere oder unlesbare Datei wird nicht angefasst (dafuer sind
+ * Zweitschrift und Selbstheilung da). Rueckgabe: Feld der nachgetragenen Schluessel oder null (nicht angefasst).
+ */
+function asn_config_vervollstaendigen($datei = null, &$satz = null, $protokoll = true)
+{
+    $satz = '';
+    $ziel = $datei !== null ? $datei : asn_paths()['config'];
+    $roh = is_file($ziel) ? json_decode((string) @file_get_contents($ziel), true) : null;
+    if (!is_array($roh) || !$roh) {
+        return null;
+    }
+    $fehlt = array_keys(array_diff_key(asn_vorgaben(), $roh));
+    $fremd = asn_config_fremd($roh);
+    $fremd_satz = $fremd ? '; unbekannt, stehen gelassen: ' . implode(', ', $fremd) : '';
+    if (!$fehlt) {
+        $satz = $fremd ? 'Konfiguration vollstaendig, nichts nachgetragen' . $fremd_satz . '.' : '';
+        return array();
+    }
+    $ok = asn_config_speichern(array_merge(asn_vorgaben(), $roh), $datei);
+    $satz = ($ok ? 'Konfiguration vervollstaendigt, nachgetragen: ' : 'Konfiguration liess sich nicht vervollstaendigen, es fehlen: ')
+        . implode(', ', array_map('asn_name_text', $fehlt)) . $fremd_satz . '.';
+    if ($protokoll) {
+        asn_log($satz);
+    }
+    return $ok ? $fehlt : null;
+}
+
+/**
+ * 0.9.14: Prueft das Vervollstaendigen mit Wirkung an einer PROBEDATEI in einem eigenen Ordner unter dem temporaeren
+ * Verzeichnis, nicht an der echten Konfiguration (Bauart GardenaSmartSystem 1.2.30): eine audioserverng.json mit einem
+ * Probe-Token und einer unbekannten Einstellung mit Wert, ohne die uebrigen Schluessel. Gerufen wird derselbe Kern wie
+ * beim Oeffnen der Oberflaeche (ohne Protokollzeile). Verlangt: der Name der unbekannten Einstellung steht im Satz, ihr
+ * Wert nicht; sie steht danach unveraendert in der Datei; 'mqtt_ein' ist nachgetragen. Danach werden Probedatei und Ordner
+ * entfernt. Rueckgabe array(stand, Text): 1 ja, -1 nein, 0 nicht messbar.
+ */
+function asn_vervollstaendigen_probe()
+{
+    $wurzel = rtrim(sys_get_temp_dir(), '/\\') . '/asn_vprobe_' . getmypid() . '_' . mt_rand(100000, 999999);
+    if (!@mkdir($wurzel, 0700, true)) {
+        return array(0, asn_t('TEST.A_VPROBE_NICHT'));
+    }
+    $datei = $wurzel . '/audioserverng.json';
+    $name = 'zz_probe_unbekannt';
+    $wert = 'ProbeWert' . mt_rand(100000, 999999);
+    $text = json_encode(array('aktionstoken' => 'probe' . substr(md5((string) mt_rand()), 0, 19), $name => $wert));
+    $satz = '';
+    $erg = (@file_put_contents($datei, $text) === strlen($text)) ? asn_config_vervollstaendigen($datei, $satz, false) : null;
+    $nach = is_file($datei) ? json_decode((string) @file_get_contents($datei), true) : null;
+    foreach (array_merge(glob($wurzel . '/*') ?: array(), glob($wurzel . '/.*') ?: array()) as $f) {
+        if (is_file($f)) {
+            @unlink($f);
+        }
+    }
+    @rmdir($wurzel);
+    if (!is_array($erg) || !is_array($nach)) {
+        return array(0, asn_t('TEST.A_VPROBE_NICHT'));
+    }
+    $mangel = array();
+    if (strpos($satz, $name) === false) {
+        $mangel[] = asn_t('TEST.A_VPROBE_M_NAME');
+    }
+    if (strpos($satz, $wert) !== false) {
+        $mangel[] = asn_t('TEST.A_VPROBE_M_WERT');
+    }
+    if (!isset($nach[$name]) || $nach[$name] !== $wert) {
+        $mangel[] = asn_t('TEST.A_VPROBE_M_WEG');
+    }
+    if (!array_key_exists('mqtt_ein', $nach) || !in_array('mqtt_ein', $erg, true)) {
+        $mangel[] = asn_t('TEST.A_VPROBE_M_ERG');
+    }
+    if ($mangel) {
+        return array(-1, sprintf(asn_t('TEST.A_VPROBE_FEHL'), implode(' ', $mangel)));
+    }
+    return array(1, sprintf(asn_t('TEST.A_VPROBE_OK'), $name));
 }
 
 /** Das Merkmal jedes Formulars; ohne Aktionstoken leer - dann weist die Pruefung ab (fail closed). */
@@ -2662,9 +2797,10 @@ function asn_vorgaenge()
                  'favoriten', 'tunein');
 }
 
-function asn_vorgang()
+/** Der Stand des Hintergrundvorgangs (data/.../vorgang.json; 0.9.14: $datei fuer die Probe im Reiter Test). */
+function asn_vorgang($datei = null)
 {
-    $d = asn_json_lesen(asn_paths()['vorgang']);
+    $d = asn_json_lesen($datei !== null ? $datei : asn_paths()['vorgang']);
     $v = array('vorgang' => '', 'zustand' => '', 'pid' => 0, 'start' => 0, 'ende' => 0, 'schritt' => '', 'grund' => '',
                'text' => '', 'ergebnis' => '');
     foreach ($v as $k => $w) {
@@ -2793,18 +2929,202 @@ function asn_vorgang_satz(array $v)
     }
     $was = asn_t('VORGANG.' . strtoupper($v['vorgang']));
     if (in_array($v['zustand'], array('gestartet', 'laeuft'), true)) {
-        return sprintf(asn_t('VORGANG.LAEUFT'), $was, $v['schritt'] !== '' ? $v['schritt'] : '-', max(0, time() - $v['start']));
+        // 0.9.14: Dauer lesbar, Beginn als Uhrzeit, Schritt als Satz (bis 0.9.13 "Schritt abbild, seit 248 s").
+        return sprintf(asn_t('VORGANG.LAEUFT'), $was, asn_dauer_text(max(0, time() - $v['start'])),
+            $v['start'] > 0 ? date('H:i:s', $v['start']) : '-', $v['schritt'] !== '' ? asn_schritt_text($v['schritt']) : asn_t('SCHRITT.START'));
     }
     if ($v['zustand'] === 'fertig') {
         return sprintf(asn_t('VORGANG.FERTIG'), $was, asn_t('ERGEBNIS.' . preg_replace('/[^A-Z_]/', '', strtoupper($v['ergebnis']))),
             date('Y-m-d H:i:s', $v['ende']));
     }
     if ($v['zustand'] === 'abgebrochen') {
-        return sprintf(asn_t('VORGANG.ABGEBROCHEN'), $was);
+        return sprintf(asn_t('VORGANG.ABGEBROCHEN'), $was, $v['schritt'] !== '' ? asn_schritt_text($v['schritt']) : '-');
     }
     return sprintf(asn_t('VORGANG.FEHLER'), $was, asn_grund_text($v['grund']) . ($v['text'] !== '' ? ' (' . $v['text'] . ')' : '')
         . ($v['ergebnis'] !== '' ? ' ' . asn_grund_text($v['ergebnis']) : ''),
         date('Y-m-d H:i:s', $v['ende'] > 0 ? $v['ende'] : time()));
+}
+
+/** 0.9.14: Eine Dauer in Sekunden als Text ("35 s", "4 min 12 s", "1 h 05 min"). */
+function asn_dauer_text($s)
+{
+    $s = max(0, (int) $s);
+    if ($s < 60) {
+        return $s . ' s';
+    }
+    if ($s < 3600) {
+        return intdiv($s, 60) . ' min ' . sprintf('%02d', $s % 60) . ' s';
+    }
+    return intdiv($s, 3600) . ' h ' . sprintf('%02d', intdiv($s % 3600, 60)) . ' min';
+}
+
+/** 0.9.14: Der Satz zu einem Schritt des Vorgangs (Abschnitt SCHRITT der Sprachdatei); ein unbekannter bleibt der Schluessel. */
+function asn_schritt_text($schritt)
+{
+    $s = strtoupper((string) preg_replace('/[^a-z_]/', '', strtolower((string) $schritt)));
+    if ($s === '') {
+        return '-';
+    }
+    $t = asn_t('SCHRITT.' . $s);
+    return $t === 'SCHRITT.' . $s ? strtolower($s) : $t;
+}
+
+/**
+ * 0.9.14 (Entscheidung des Hausherrn 16.11.2026, "Ja, einbauen"): die Lage des Hintergrundvorgangs fuer die
+ * Fortschrittsanzeige im Reiter Einstellungen und fuer die Abfrage index.php?ajax=vorgang. NUR aus vorgang.json und der
+ * Prozessliste (asn_vorgang()), kein Docker-Aufruf. Ohne Werte von Zugangsdaten: der Text des Vorgangs ist schon beim
+ * Schreiben gefiltert (asn_geheim_weg), und der Satz geht hier ein zweites Mal durch den Filter.
+ * Anlass, am LoxBerry des Hausherrn gemessen (asn.log, 16.11.2026): ein Update lief von 00:06:33 bis 00:10:58 (Abbild rund
+ * 330 MB laden, Datenordner kopieren, Container neu); die Seite zeigte so lange denselben Stand, der Hausherr hielt das
+ * Update fuer gescheitert und startete es um 00:11:31 noch einmal (Ergebnis UNVERAENDERT).
+ * art: keiner | laeuft | fertig | fehler | abgebrochen. 'lang': laeuft laenger als ASN_VORGANG_LANG_S - die Anzeige warnt,
+ * der Vorgang bleibt gesperrt (er lebt ja). 'zeigen': der Kasten erscheint (laufend, abgebrochen oder vor hoechstens
+ * ASN_VORGANG_ZEIGEN_S beendet).
+ */
+function asn_vorgang_anzeige($v = null, $jetzt = null)
+{
+    $v = is_array($v) ? $v : asn_vorgang();
+    $jetzt = $jetzt !== null ? (int) $jetzt : time();
+    $art = 'keiner';
+    if ($v['vorgang'] !== '') {
+        if (in_array($v['zustand'], array('gestartet', 'laeuft'), true)) {
+            $art = 'laeuft';
+        } elseif (in_array($v['zustand'], array('fertig', 'fehler', 'abgebrochen'), true)) {
+            $art = $v['zustand'];
+        } else {
+            $art = 'fehler';     // ein Zustand, den diese Fassung nicht kennt, ist kein Erfolg
+        }
+    }
+    $was = $v['vorgang'] !== '' ? asn_t('VORGANG.' . strtoupper(preg_replace('/[^a-z_]/', '', $v['vorgang']))) : '';
+    $seit = $art === 'laeuft' && $v['start'] > 0 ? max(0, $jetzt - $v['start']) : 0;
+    $lang = $art === 'laeuft' && $seit > ASN_VORGANG_LANG_S;
+    $kopf = $art === 'keiner' ? '' : sprintf(asn_t('VORGANG.K_' . strtoupper($art)), $was);
+    $satz = $art === 'keiner' ? '' : asn_geheim_weg(asn_vorgang_satz($v));
+    $hinweis = '';
+    if ($art === 'laeuft') {
+        $hinweis = $lang ? sprintf(asn_t('VORGANG.LANG'), intdiv(ASN_VORGANG_LANG_S, 60)) : asn_t('VORGANG.H_LAUFEND');
+    } elseif ($art === 'abgebrochen') {
+        $hinweis = asn_t('VORGANG.H_ABGEBROCHEN');
+    }
+    $zeigen = $art === 'laeuft' || $art === 'abgebrochen'
+        || ($art !== 'keiner' && $v['ende'] > 0 && $jetzt - $v['ende'] <= ASN_VORGANG_ZEIGEN_S);
+    return array(
+        'art'     => $art,
+        'laeuft'  => $art === 'laeuft' ? 1 : 0,
+        'warnung' => ($art === 'fehler' || $art === 'abgebrochen' || $lang) ? 1 : 0,
+        'lang'    => $lang ? 1 : 0,
+        'zeigen'  => $zeigen ? 1 : 0,
+        'vorgang' => $v['vorgang'],
+        'was'     => $was,
+        'seit_s'  => $seit,
+        'seit'    => $art === 'laeuft' ? asn_dauer_text($seit) : '',
+        'beginn'  => $v['start'] > 0 ? date('H:i:s', $v['start']) : '',
+        'schritt' => $art === 'laeuft' ? ($v['schritt'] !== '' ? asn_schritt_text($v['schritt']) : asn_t('SCHRITT.START')) : '',
+        'kopf'    => $kopf,
+        'satz'    => $satz,
+        'hinweis' => $hinweis,
+    );
+}
+
+/**
+ * 0.9.14: Die Meldung fuer einen zweiten Start waehrend eines laufenden Vorgangs (Grund VORGANG_LAEUFT): welcher Vorgang,
+ * seit wann, welcher Schritt. Bis 0.9.13 stand dort "Es laeuft schon ein Vorgang (update)".
+ */
+function asn_vorgang_bereits_text()
+{
+    $a = asn_vorgang_anzeige();
+    if (!$a['laeuft']) {
+        return asn_grund_text('VORGANG_LAEUFT|?');
+    }
+    return sprintf(asn_t('VORGANG.BEREITS'), $a['was'], $a['seit'], $a['beginn'] !== '' ? $a['beginn'] : '-', $a['schritt']);
+}
+
+/**
+ * 0.9.14: Pruefzeilen zum Vorgangszustand (Reiter Test). Gelesen wird $datei roh (ab Werk data/.../vorgang.json), nicht
+ * ueber asn_vorgang(): das wuerde Fehlformen still ausgleichen. Stimmig heisst: gueltiges JSON mit den neun Feldern in
+ * ihrer Art, bekannter Vorgang und Zustand, bei "fertig"/"fehler" ein Ende nicht vor dem Beginn, bei "laeuft" eine
+ * Prozessnummer. Rueckgabe array(ok true|false|null, Text).
+ */
+function asn_vorgang_datei_pruefen($datei = null)
+{
+    $datei = $datei !== null ? $datei : asn_paths()['vorgang'];
+    if (!is_file($datei)) {
+        return array(null, asn_t('TEST.A_VDATEI_KEINE'));
+    }
+    $d = json_decode((string) @file_get_contents($datei), true);
+    if (!is_array($d)) {
+        return array(false, asn_t('TEST.A_VDATEI_KAPUTT'));
+    }
+    $mangel = array();
+    $art = array('vorgang' => 's', 'zustand' => 's', 'pid' => 'i', 'start' => 'i', 'ende' => 'i', 'schritt' => 's', 'grund' => 's',
+                 'text' => 's', 'ergebnis' => 's');
+    foreach ($art as $k => $a) {
+        if (!array_key_exists($k, $d) || ($a === 'i' ? !is_int($d[$k]) : !is_string($d[$k]))) {
+            $mangel[] = $k;
+        }
+    }
+    if (!$mangel) {
+        if (!in_array($d['vorgang'], asn_vorgaenge(), true)) {
+            $mangel[] = 'vorgang=' . asn_name_text($d['vorgang']);
+        }
+        if (!in_array($d['zustand'], array('gestartet', 'laeuft', 'fertig', 'fehler'), true)) {
+            $mangel[] = 'zustand=' . asn_name_text($d['zustand']);
+        } elseif (in_array($d['zustand'], array('fertig', 'fehler'), true) && ($d['ende'] <= 0 || $d['ende'] < $d['start'])) {
+            $mangel[] = 'ende';
+        } elseif ($d['zustand'] === 'laeuft' && $d['pid'] <= 0) {
+            $mangel[] = 'pid';
+        }
+    }
+    if ($mangel) {
+        return array(false, sprintf(asn_t('TEST.A_VDATEI_FEHL'), implode(', ', $mangel)));
+    }
+    return array(true, sprintf(asn_t('TEST.A_VDATEI_OK'), asn_vorgang_satz(asn_vorgang($datei))));
+}
+
+/**
+ * 0.9.14: Erkennt die Anzeige einen haengengebliebenen Vorgang? Gemessen an einer PROBEDATEI im temporaeren Verzeichnis
+ * (die echte vorgang.json bleibt unberuehrt): Zustand "laeuft" seit 120 s mit der Prozessnummer dieser Anfrage - sie
+ * lebt, ist aber nicht asn_vorgang.php. Verlangt: asn_vorgang() nennt ihn "abgebrochen", die Anzeige sperrt nicht
+ * (laeuft 0), warnt und nennt einen Ausweg. Unter Windows (keine Prozessliste) nicht messbar.
+ * Rueckgabe array(stand, Text): 1 ja, -1 nein, 0 nicht messbar.
+ */
+function asn_vorgang_haenger_probe()
+{
+    if (DIRECTORY_SEPARATOR === '\\' || !is_dir('/proc/' . getmypid())) {
+        return array(0, asn_t('TEST.A_HAENGER_NICHT'));
+    }
+    $wurzel = rtrim(sys_get_temp_dir(), '/\\') . '/asn_hprobe_' . getmypid() . '_' . mt_rand(100000, 999999);
+    if (!@mkdir($wurzel, 0700, true)) {
+        return array(0, asn_t('TEST.A_HAENGER_NICHT'));
+    }
+    $datei = $wurzel . '/vorgang.json';
+    $jetzt = time();
+    $probe = array('vorgang' => 'update', 'zustand' => 'laeuft', 'pid' => (int) getmypid(), 'start' => $jetzt - 120, 'ende' => 0,
+                   'schritt' => 'abbild', 'grund' => '', 'text' => '', 'ergebnis' => '');
+    $v = null;
+    if (asn_json_schreiben($datei, $probe, 0600)) {
+        $v = asn_vorgang($datei);
+    }
+    @unlink($datei);
+    @rmdir($wurzel);
+    if (!is_array($v)) {
+        return array(0, asn_t('TEST.A_HAENGER_NICHT'));
+    }
+    $a = asn_vorgang_anzeige($v, $jetzt);
+    $mangel = array();
+    if ($v['zustand'] !== 'abgebrochen') {
+        $mangel[] = sprintf(asn_t('TEST.A_HAENGER_M_ZUSTAND'), asn_name_text($v['zustand']));
+    }
+    if ($a['laeuft'] !== 0) {
+        $mangel[] = asn_t('TEST.A_HAENGER_M_SPERRT');
+    }
+    if ($a['warnung'] !== 1 || $a['hinweis'] === '') {
+        $mangel[] = asn_t('TEST.A_HAENGER_M_AUSWEG');
+    }
+    if ($mangel) {
+        return array(-1, sprintf(asn_t('TEST.A_HAENGER_FEHL'), implode(' ', $mangel)));
+    }
+    return array(1, asn_t('TEST.A_HAENGER_OK'));
 }
 
 /**

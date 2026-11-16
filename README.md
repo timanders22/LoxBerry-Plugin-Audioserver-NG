@@ -10,7 +10,7 @@ DLNA/UPnP, Snapcast, Sendspin, Squeezelite, Music-Assistant-Player); mit diesem 
 **Amazon Echo wird nicht unterstützt** – sonn core 4.0.0-beta.22 hat keinen Ausgang für Echo/Alexa (Bluetooth nur als
 Eingang). Für Ansagen und Radio auf Echo-Geräten gibt es das Plugin [Alexa NG](https://wiki.loxberry.de/plugins/alexang/start).
 
-Version 0.9.13 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.14 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
 **Stand 0.9.3:** vierte Fassung (0.9.0 bis 0.9.2 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
@@ -19,6 +19,48 @@ Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
 
 ---
+
+## Neu in 0.9.14
+
+- **Fortschrittsanzeige für Vorgänge im Reiter Einstellungen.** Solange ein Vorgang im Hintergrund läuft (Update von
+  sonn core, Container anlegen oder angleichen, Wechsel von der Probe, Rückweg, Starten, Stoppen, Neu starten,
+  Bibliothek einlesen, Favoriten übernehmen, TuneIn-Vorgaben), steht oben im Reiter Einstellungen ein Kasten: welcher
+  Vorgang, „läuft seit …“, die Uhrzeit des Beginns und der aktuelle Schritt in Worten (zum Beispiel „das Abbild wird
+  geladen, falls es noch fehlt“). Die Anzeige fragt alle 3 Sekunden den Stand ab und setzt ihn ein, ohne die Seite neu
+  zu laden; die Zeile „Letzter Vorgang“ im Kopf läuft mit. Am Ende steht dort das Ergebnis – etwa „neue Fassung läuft“,
+  „unverändert“ oder „nicht gelungen“ mit Grund – und ein Verweis zum Neuladen der Seite. Anlass: Ein Update mit Laden
+  des Abbilds dauerte am Gerät gut vier Minuten, und die Seite zeigte so lange denselben Stand.
+- **Knöpfe für Vorgänge sind gesperrt, solange einer läuft.** Ein zweiter Start (etwa aus einer älteren Seite) wird wie
+  bisher abgelehnt; die Meldung nennt jetzt, welcher Vorgang seit wann und in welchem Schritt läuft. Bis 0.9.13 stand dort
+  „Es läuft schon ein Vorgang (update).“
+- **Ein hängengebliebener Vorgang sperrt nichts.** Ist sein Prozess fort (etwa nach einem Neustart des LoxBerry), zeigt
+  der Kasten „Abgebrochen“ mit dem letzten Schritt und dem Hinweis, dass der Vorgang neu gestartet werden kann; erkannt
+  wird das wie bisher, sobald der Prozess fehlt (frühestens 10 Sekunden nach dem Beginn). Läuft ein lebender Vorgang länger als 40 Minuten, warnt
+  die Anzeige; er bleibt gesperrt und endet an seinen Zeitgrenzen.
+- **Die Seite steht sofort, auch wenn Docker beschäftigt ist.** Solange ein Vorgang läuft, fragt der Reiter
+  Einstellungen Docker nicht nach der Liste der Netze und dem Probe-Container; beides erscheint nach dem Ende wieder.
+  Nachgestellt mit 12 Sekunden Antwortzeit je Docker-Anfrage: die Seite nach dem Start eines Updates brauchte bis 0.9.13
+  22 Sekunden, jetzt 0,2 Sekunden.
+- **Verhalten geändert – unbekannte Einstellungen bleiben stehen.** Eine Einstellung in `audioserverng.json`, die diese
+  Fassung nicht kennt (Rest einer anderen Fassung oder von Hand eingetragen), ging bis 0.9.13 bei jedem Speichern
+  verloren, auch beim selbsttätigen Vervollständigen nach einem Update, ohne Meldung. Jetzt bleibt sie stehen; die
+  Protokollzeile des Vervollständigens nennt sie mit Namen, nie mit Wert. „Einstellungen zurückspielen“ speichert wie
+  bisher genau den Stand der Sicherung: dort fällt eine unbekannte Einstellung weg und wird genannt.
+- **Reiter Test, vier neue Zeilen:** unbekannte Einstellungen in der Konfiguration (Hinweis mit Namen); das
+  Vervollständigen, gemessen an einer Probedatei im temporären Verzeichnis (die echte Konfiguration bleibt unberührt);
+  der Zustand des Hintergrundvorgangs (`vorgang.json` lesbar und stimmig); die Erkennung eines hängengebliebenen
+  Vorgangs, gemessen an einer Probedatei.
+- **Verhalten geändert – der Datenordner übersteht ein Plugin-Update.** Bis 0.9.13 war `data/plugins/audioserverng/`
+  nach jedem Update leer (Stand des Takts, zuletzt gesendete MQTT-Werte, letzter Vorgang, Liste der Fassungen, Stand
+  der Favoriten). Jetzt sichert ihn `preupgrade.sh` über den gemeinsamen Baustein `upgrade_daten.sh` 1.1.0, und
+  `postinstall.sh` spielt ihn zurück. Nicht mitgenommen werden Sperrdateien (`*.pid`, `*.lock`) und der Ordner
+  `befehle/` der Befehlsbrücke mit den Optionsdateien für Mosquitto, in denen das Kennwort des Brokers steht; ihn legt
+  die Brücke beim Start nach dem Update selbst neu an. Misslingt das Sichern, bricht die Aktualisierung ab, und die
+  bisherige Fassung bleibt installiert. Die Daten von sonn, das Abbild und der Container sind davon nicht berührt.
+- **Dokumentation:** `plugin.cfg` nennt die Adresse des Repositorys; LoxBerry zeigt sie in der Plugin-Verwaltung als
+  Knopf „Dokumentation“.
+- Gemessen unter Linux (WSL, PHP 8.3) mit einer Docker-Attrappe und auf dem Arbeitsrechner unter PHP 7.4 und 8.4; am
+  Gerät nicht gemessen.
 
 ## Neu in 0.9.13
 

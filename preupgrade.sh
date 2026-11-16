@@ -13,6 +13,10 @@
 #   verworfen: sie kommt als <ordner>.json.kaputt.<zeit> (0600) NEBEN den Ordner - purge_installation loescht den Ordner
 #   gleich. Ebenso die Datei audioserverng.json.kaputt, die das Plugin selbst beim Lesen beiseitelegt. Laesst sich die
 #   Konfiguration nicht sichern und gibt es keine heile Zweitschrift, bricht das Update ab (exit 2).
+# [upgrade_daten] Argumente des Installers festhalten - unten sichert der gemeinsame Baustein
+# [upgrade_daten] upgrade_daten.sh (neben diesem Skript) den ganzen Datenordner.
+UPGD_ORDNER="$3"; UPGD_WURZEL="$5"
+
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-audioserverng}"
@@ -137,4 +141,20 @@ if [ -f "$ASN_BBSH" ]; then
     echo "<INFO> Befehlsbruecke: $ASN_BBAUS"
 fi
 echo "<OK> preupgrade abgeschlossen (der sonn-Container laeuft weiter)."
+# 0.9.14 (Entscheidung des Hausherrn 15.11.2026, Regeln/06): die Befehlsbruecke wird nicht mitgesichert. Sie legt
+# befehle/ samt Optionsdateien fuer Mosquitto beim Start nach dem Update selbst neu an (befehlsbruecke.sh start,
+# bb_optionen() aus config/system/general.json; nachgestellt in WSL 16.11.2026,
+# Pruefung-Audioserver-NG-0.9.14/update_nachgestellt/) - das Kennwort des Brokers steht in keiner Update-Sicherung.
+# Einen Ordner antworten/ fuehrt diese Linie nicht.
+UPGD_OHNE="befehle"
+
+# [upgrade_daten] Gemeinsamer Baustein (Werkzeuge/gemeinsam/upgrade_daten.sh): den ganzen Datenordner
+# [upgrade_daten] neben den Ordner sichern; misslingt das, bricht die Aktualisierung mit Rueckgabe 2 ab.
+if [ -f "$(dirname "$0")/upgrade_daten.sh" ] && . "$(dirname "$0")/upgrade_daten.sh"; then
+    upgrade_daten_sichern "$UPGD_ORDNER" "$UPGD_WURZEL" || exit 2
+else
+    echo "<FAIL> Der Baustein upgrade_daten.sh fehlt neben $(basename "$0") - die Aktualisierung wird abgebrochen,"
+    echo "<FAIL> die bisherige Fassung bleibt installiert."
+    exit 2
+fi
 exit 0

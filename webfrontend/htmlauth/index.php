@@ -35,6 +35,17 @@ if ($asn_p['home'] !== '' && is_file($asn_p['home'] . '/libs/phplib/loxberry_sys
     require_once $asn_p['home'] . '/libs/phplib/loxberry_system.php';
     require_once $asn_p['home'] . '/libs/phplib/loxberry_web.php';
 }
+/* 0.9.14: Stand des Hintergrundvorgangs als JSON fuer die Fortschrittsanzeige im Reiter Einstellungen
+ * (index.php?ajax=vorgang; Bauart Sprachsteuerung 0.12 ajax=verlauf). Nur lesend, im angemeldeten Bereich, ohne Merkmal -
+ * ein GET aendert nichts und legt nichts an. Kein Docker-Aufruf: nur vorgang.json und die Prozessliste. Das Skript setzt
+ * die Werte als Text (textContent). */
+if ((isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'GET' && isset($_GET['ajax']) && $_GET['ajax'] === 'vorgang') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo json_encode(array('ok' => 1, 'zeit' => time()) + asn_vorgang_anzeige(),
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    exit;
+}
 if ($asn_p['home'] !== '' && !is_dir($asn_p['datadir'])) {
     @mkdir($asn_p['datadir'], 0700, true);
 }
@@ -85,6 +96,8 @@ $asn_vorgang_los = function ($auftrag) use (&$asn_meldungen, &$asn_misslungen) {
     list($ok, $g) = asn_vorgang_starten($auftrag);
     if ($ok) {
         $asn_meldungen[] = sprintf(asn_t('VORGANG.GESTARTET'), asn_t('VORGANG.' . strtoupper($auftrag)));
+    } elseif (strpos((string) $g, 'VORGANG_LAEUFT') === 0) {
+        $asn_misslungen[] = asn_vorgang_bereits_text();     // 0.9.14: welcher Vorgang, seit wann, welcher Schritt
     } else {
         $asn_misslungen[] = asn_grund_text($g);
     }
@@ -580,6 +593,8 @@ $asn_cfg = asn_config();
 $asn_zu = asn_zustand();
 $asn_merk = asn_merk();
 $asn_vg = asn_vorgang();
+$asn_va = asn_vorgang_anzeige($asn_vg);     // 0.9.14: Fortschrittsanzeige
+$asn_aus = $asn_va['laeuft'] ? ' disabled' : '';     // 0.9.14: Knoepfe fuer Vorgaenge, solange einer laeuft
 $asn_mqtt = asn_mqtt_zustand();
 list($asn_bl, $asn_bt) = asn_bruecke_lage();
 $asn_aktiv = !empty($asn_cfg['container_ein']) || $asn_merk['angelegt'];
@@ -599,7 +614,10 @@ $asn_zeichen = function ($ok) {
 /* Netzliste und Probe nur, wenn die Verwaltung an ist oder der Reiter Einstellungen offen ist (sie fragen Docker). */
 $asn_netze = array();
 $asn_probe = array(null, null);
-if ($asn_tab === 'tab-settings' && asn_docker_bin()) {
+/* 0.9.14: nicht, solange ein Vorgang laeuft. Waehrend docker pull antwortet Docker traege (am Geraet 16.11.2026: "Takt:
+ * Docker antwortet nicht binnen 10 s"); nachgestellt in WSL mit 12 s je Anfrage stand die Seite nach dem Start eines
+ * Updates erst nach 22 s. Netzliste und Probe erscheinen nach dem Ende wieder. */
+if ($asn_tab === 'tab-settings' && asn_docker_bin() && !$asn_va['laeuft']) {
     list(, $asn_netze) = asn_macvlan_netze();
     $asn_netze = asn_netze_passend($asn_netze, $asn_ein('schnittstelle'), '');   // nur Netze an der Schnittstelle des Formulars
     $asn_probe = asn_probe(10);
@@ -738,7 +756,7 @@ if ($asn_rahmen) {
 <tr><td><?= asn_e(asn_t('KOPF.BRUECKE')) ?></td>
 <td><?= $asn_zeichen($asn_bl) ?> <?= $asn_bt ?></td></tr>
 <tr><td><?= asn_e(asn_t('KOPF.VORGANG')) ?></td>
-<td><?= asn_e($asn_vg['vorgang'] !== '' ? asn_vorgang_satz($asn_vg) : '-') ?></td></tr>
+<td id="asn_kopf_vorgang"><?= asn_e($asn_vg['vorgang'] !== '' ? asn_vorgang_satz($asn_vg) : '-') ?></td></tr>
 </table>
 
 <div class="sm-tabs">
@@ -757,6 +775,16 @@ if ($asn_rahmen) {
 <!-- ================= Reiter: Einstellungen ================= -->
 <div class="sm-seite<?= $asn_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
 <div class="sm-hinweis"><?= asn_e(asn_t('EINST.WAS_IST_DAS')) ?></div>
+<?php /* 0.9.14 (Entscheidung des Hausherrn 16.11.2026): Fortschritt des Hintergrundvorgangs. Laeuft einer, fragt das Skript
+   unten alle 3 s index.php?ajax=vorgang (nur lesend) und setzt Kopf, Satz und Hinweis als Text; am Ende erscheint das
+   Ergebnis, die gesperrten Knoepfe werden wieder frei, und ein Verweis laedt die Seite neu. */ ?>
+<div id="asn_vorgang_lage" class="<?= $asn_va['warnung'] ? 'sm-warnung' : 'sm-hinweis' ?>" data-laeuft="<?= (int) $asn_va['laeuft'] ?>"<?= $asn_va['zeigen'] ? '' : ' style="display:none;"' ?>>
+<b id="asn_vl_kopf"><?= asn_e($asn_va['kopf']) ?></b><br>
+<span id="asn_vl_satz"><?= asn_e($asn_va['satz']) ?></span><br>
+<span id="asn_vl_hinweis" class="sm-hilfe"><?= asn_e($asn_va['hinweis']) ?></span>
+<span id="asn_vl_ende" style="display:none;"><?= asn_e(asn_t('VORGANG.ENDE')) ?> <a href="index.php?form=settings"><?= asn_e(asn_t('VORGANG.NEU_LADEN')) ?></a></span>
+<span id="asn_vl_stoerung" class="sm-aus" style="display:none;"><?= asn_e(asn_t('VORGANG.ABFRAGE_GESTOERT')) ?></span>
+</div>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?= asn_e(asn_t('LEGENDE.LESEN')) ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?= asn_e(asn_t('LEGENDE.AKTION')) ?></span>
@@ -768,7 +796,7 @@ if ($asn_rahmen) {
 <h2><?= asn_e(asn_t('EINRICHTEN.H')) ?></h2>
 <p><?= asn_e(asn_t('EINRICHTEN.TEXT')) ?></p>
 <?php if ($asn_einr_laeuft) { ?>
-<div class="sm-hinweis"><b><?= asn_e(asn_t('EINRICHTEN.LAEUFT')) ?></b><br><?= asn_e(asn_vorgang_satz($asn_einr_vg)) ?></div>
+<div class="sm-hinweis"><b><?= asn_e(asn_t('EINRICHTEN.LAEUFT')) ?></b><br><span class="asn-vorgang-satz"><?= asn_e(asn_vorgang_satz($asn_einr_vg)) ?></span></div>
 <div class="sm-knopfreihe">
 <a class="sm-btn sm-b-lesen" href="index.php?form=settings#asn_einrichten"><?= asn_e(asn_t('EINRICHTEN.K_NEU_LADEN')) ?></a>
 </div>
@@ -820,7 +848,7 @@ if ($asn_rahmen) {
 <input data-role="none" type="hidden" name="kennung" value="<?= asn_e($asn_ev['kennung']) ?>">
 <div class="sm-feld"><label><input data-role="none" type="checkbox" name="einrichten_ok" value="1"> <?= asn_e(asn_t('EINRICHTEN.HAKEN')) ?></label></div>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="einrichten"><?= asn_e(asn_t('EINRICHTEN.K_EINRICHTEN')) ?></button>
+<button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="einrichten"<?= $asn_aus ?>><?= asn_e(asn_t('EINRICHTEN.K_EINRICHTEN')) ?></button>
 </div>
 </form>
 <?php } ?>
@@ -867,19 +895,19 @@ if ($asn_rahmen) {
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="fmt" value="<?= asn_e($asn_fmt) ?>">
     <input data-role="none" type="hidden" name="formular" value="container">
-    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="aktion" value="starten"><?= asn_e(asn_t('EINST.K_STARTEN')) ?></button>
+    <button data-role="none" class="sm-btn sm-b-lesen asn-vorgang-knopf" type="submit" name="aktion" value="starten"<?= $asn_aus ?>><?= asn_e(asn_t('EINST.K_STARTEN')) ?></button>
   </form>
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="fmt" value="<?= asn_e($asn_fmt) ?>">
     <input data-role="none" type="hidden" name="formular" value="container">
-    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="neustart"><?= asn_e(asn_t('EINST.K_NEUSTART')) ?></button>
+    <button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="neustart"<?= $asn_aus ?>><?= asn_e(asn_t('EINST.K_NEUSTART')) ?></button>
   </form>
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="fmt" value="<?= asn_e($asn_fmt) ?>">
     <input data-role="none" type="hidden" name="formular" value="container">
-    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="stoppen"><?= asn_e(asn_t('EINST.K_STOPPEN')) ?></button>
+    <button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="stoppen"<?= $asn_aus ?>><?= asn_e(asn_t('EINST.K_STOPPEN')) ?></button>
   </form>
 </div>
 <?php } ?>
@@ -912,7 +940,7 @@ $asn_fav_laeuft = $asn_vg['vorgang'] === 'favoriten' && in_array($asn_vg['zustan
 <div class="sm-warnung"><?= asn_e(asn_t('FAV.H_ERSETZT')) ?></div>
 <div class="sm-feld"><label><input data-role="none" type="checkbox" name="favoriten_ok" value="1"> <?= asn_e(asn_t('FAV.HAKEN')) ?></label></div>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="uebernehmen"<?= $asn_fav_laeuft ? ' disabled' : '' ?>><?= asn_e(asn_t('FAV.K_UEBERNEHMEN')) ?></button>
+<button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="uebernehmen"<?= $asn_aus ?>><?= asn_e(asn_t('FAV.K_UEBERNEHMEN')) ?></button>
 </div>
 </form>
 <?php if ($asn_fav_liste) { ?>
@@ -928,7 +956,7 @@ $asn_fav_laeuft = $asn_vg['vorgang'] === 'favoriten' && in_array($asn_vg['zustan
 <p class="sm-hilfe"><?= asn_e(asn_t('FAV.LEER')) ?></p>
 <?php } ?>
 <?php if ($asn_fav_laeuft) { ?>
-<div class="sm-hinweis"><?= asn_e(asn_vorgang_satz($asn_vg)) ?></div>
+<div class="sm-hinweis asn-vorgang-satz"><?= asn_e(asn_vorgang_satz($asn_vg)) ?></div>
 <?php } elseif ($asn_fav_stand !== null) { ?>
 <h3><?= asn_e(sprintf(asn_t('FAV.H_STAND'), date('Y-m-d H:i:s', $asn_fav_stand['zeit']))) ?></h3>
 <div class="<?= $asn_fav_stand['ok'] ? 'sm-hinweis' : 'sm-warnung' ?>"><?= asn_e($asn_fav_stand['ok'] ? asn_t('FAV.STAND_OK') : sprintf(asn_t('FAV.STAND_FEHLER'), asn_grund_text($asn_fav_stand['grund']))) ?></div>
@@ -955,7 +983,7 @@ $asn_tu_laeuft = $asn_vg['vorgang'] === 'tunein' && in_array($asn_vg['zustand'],
 <h2><?= asn_e(asn_t('TUNEIN.H')) ?></h2>
 <p><?= asn_e(asn_t('TUNEIN.TEXT')) ?></p>
 <?php if ($asn_tu_laeuft) { ?>
-<div class="sm-hinweis"><?= asn_e(asn_vorgang_satz($asn_vg)) ?></div>
+<div class="sm-hinweis asn-vorgang-satz"><?= asn_e(asn_vorgang_satz($asn_vg)) ?></div>
 <?php } elseif (!empty($asn_cfg['tunein_ausblenden']) && ($asn_tu['lage'] === 'unbekannt' || $asn_tu['lage'] === 'fehlt')) { ?>
 <div class="sm-warnung"><?= asn_e(asn_grund_text($asn_tu['lage'] === 'fehlt' ? 'TUNEIN_FEHLT' : 'TUNEIN_UNBEKANNT')) ?></div>
 <?php } else { ?>
@@ -968,7 +996,7 @@ $asn_tu_laeuft = $asn_vg['vorgang'] === 'tunein' && in_array($asn_vg['zustand'],
 <div class="sm-feld"><label><input data-role="none" type="checkbox" name="tunein_ausblenden" value="1"<?= !empty($asn_cfg['tunein_ausblenden']) ? ' checked' : '' ?>> <?= asn_e(asn_t('TUNEIN.HAKEN')) ?></label>
 <p class="sm-hilfe"><?= asn_e(asn_t('TUNEIN.H_NEUSTART')) ?></p></div>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern" value="1"<?= $asn_tu_laeuft ? ' disabled' : '' ?>><?= asn_e(asn_t('ALLG.K_SPEICHERN')) ?></button>
+<button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="speichern" value="1"<?= $asn_aus ?>><?= asn_e(asn_t('ALLG.K_SPEICHERN')) ?></button>
 </div>
 </form>
 </div>
@@ -978,6 +1006,9 @@ $asn_tu_laeuft = $asn_vg['vorgang'] === 'tunein' && in_array($asn_vg['zustand'],
 <details id="asn_erweitert"<?= $asn_eingaben ? ' open' : '' ?>>
 <summary><?= asn_e(asn_t('EINST.H_ERWEITERT')) ?></summary>
 <p class="sm-hilfe"><?= asn_e(asn_t('EINST.ERWEITERT_TEXT')) ?></p>
+<?php if ($asn_va['laeuft']) { ?>
+<div class="sm-hinweis"><?= asn_e(asn_t('VORGANG.H_OHNE_DOCKER')) ?></div>
+<?php } ?>
 <?php if ($asn_probe[0] === true) { ?>
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
@@ -1053,7 +1084,7 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="fmt" value="<?= asn_e($asn_fmt) ?>">
     <input data-role="none" type="hidden" name="formular" value="container">
-    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="anlegen"><?= asn_e(asn_t('EINST.K_ANLEGEN')) ?></button>
+    <button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="anlegen"<?= $asn_aus ?>><?= asn_e(asn_t('EINST.K_ANLEGEN')) ?></button>
   </form>
 </div>
 
@@ -1069,7 +1100,7 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
 <input data-role="none" type="hidden" name="formular" value="probe">
 <div class="sm-feld"><label><input data-role="none" type="checkbox" name="wechsel_ok" value="1"> <?= asn_e(asn_t('PROBE.WECHSEL_HAKEN')) ?></label></div>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="wechsel"><?= asn_e(asn_t('PROBE.K_WECHSEL')) ?></button>
+<button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="wechsel"<?= $asn_aus ?>><?= asn_e(asn_t('PROBE.K_WECHSEL')) ?></button>
 </div>
 </form>
 <form action="index.php" method="post">
@@ -1078,11 +1109,11 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
 <input data-role="none" type="hidden" name="formular" value="probe">
 <div class="sm-feld"><label><input data-role="none" type="checkbox" name="entfernen_ok" value="1"> <?= asn_e(asn_t('PROBE.ENTFERNEN_HAKEN')) ?></label></div>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="entfernen"><?= asn_e(asn_t('PROBE.K_ENTFERNEN')) ?></button>
+<button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="entfernen"<?= $asn_aus ?>><?= asn_e(asn_t('PROBE.K_ENTFERNEN')) ?></button>
 </div>
 </form>
 <?php } else { ?>
-<p class="sm-hilfe"><?= asn_e(asn_t($asn_pda === false ? 'PROBE.KEINE' : 'PROBE.UNKLAR')) ?></p>
+<p class="sm-hilfe"><?= asn_e($asn_va['laeuft'] ? asn_t('VORGANG.H_OHNE_DOCKER') : asn_t($asn_pda === false ? 'PROBE.KEINE' : 'PROBE.UNKLAR')) ?></p>
 <?php } ?>
 
 </details>
@@ -1130,7 +1161,7 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
 <input data-role="none" type="text" id="asn_digest" name="digest" value="" maxlength="71" placeholder="sha256:..."></div>
 <div class="sm-feld"><label><input data-role="none" type="checkbox" name="update_ok" value="1"> <?= asn_e(asn_t('ABBILD.UPDATE_HAKEN')) ?></label></div>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="update"><?= asn_e(asn_t('ABBILD.K_UPDATE')) ?></button>
+<button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="update"<?= $asn_aus ?>><?= asn_e(asn_t('ABBILD.K_UPDATE')) ?></button>
 </div>
 </form>
 <?php if (asn_digest_gueltig($asn_cfg['abbild_vorher'])) { ?>
@@ -1141,7 +1172,7 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
 <p class="sm-hilfe"><?= asn_e(sprintf(asn_t('ABBILD.RUECKWEG_TEXT'), asn_kurzdigest($asn_cfg['abbild_vorher']), $asn_cfg['datenordner_vorher'])) ?></p>
 <div class="sm-feld"><label><input data-role="none" type="checkbox" name="rueckweg_ok" value="1"> <?= asn_e(asn_t('ABBILD.RUECKWEG_HAKEN')) ?></label></div>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="rueckweg"><?= asn_e(asn_t('ABBILD.K_RUECKWEG')) ?></button>
+<button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="rueckweg"<?= $asn_aus ?>><?= asn_e(asn_t('ABBILD.K_RUECKWEG')) ?></button>
 </div>
 </form>
 <?php } ?>
@@ -1178,7 +1209,7 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
 <input data-role="none" type="hidden" name="formular" value="abbilder">
 <div class="sm-feld"><label><input data-role="none" type="checkbox" name="aufraeumen_ok" value="1"> <?= asn_e(sprintf(asn_t('ABBILDER.HAKEN'), $asn_azahl, asn_mb($asn_afrei))) ?></label></div>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="aufraeumen"><?= asn_e(asn_t('ABBILDER.K_AUFRAEUMEN')) ?></button>
+<button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="aufraeumen"<?= $asn_aus ?>><?= asn_e(asn_t('ABBILDER.K_AUFRAEUMEN')) ?></button>
 </div>
 </form>
 <?php } ?>
@@ -1431,7 +1462,7 @@ $asn_bilder = array(
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
     <input data-role="none" type="hidden" name="fmt" value="<?= asn_e($asn_fmt) ?>">
     <input data-role="none" type="hidden" name="formular" value="test">
-    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="aktion" value="bibliothek"><?= asn_e(asn_t('TEST.K_BIBLIOTHEK')) ?></button>
+    <button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="bibliothek"<?= $asn_aus ?>><?= asn_e(asn_t('TEST.K_BIBLIOTHEK')) ?></button>
   </form>
 </div>
 <?php if ($asn_testausgabe !== '') { ?>
@@ -1528,6 +1559,44 @@ if ($asn_takt_err) { ?>
 			if (f) { f.value = k.getAttribute('data-digest') || ''; f.focus(); }
 		});
 	});
+})();
+/* 0.9.14 (Entscheidung des Hausherrn 16.11.2026): Fortschritt des Hintergrundvorgangs. Nur wenn die Seite mit einem
+ * laufenden Vorgang ausgeliefert wurde: alle 3 s index.php?ajax=vorgang (GET, nur lesend), solange die Seite sichtbar ist.
+ * Die Werte kommen roh und werden als Text gesetzt. Am Ende: Ergebnis, Knoepfe wieder frei, Verweis zum Neuladen. Drei
+ * gescheiterte Abfragen hintereinander (Anmeldung abgelaufen, LoxBerry nicht erreichbar) zeigen einen Hinweis; die
+ * Abfrage laeuft weiter. */
+(function () {
+	var k = document.getElementById('asn_vorgang_lage');
+	if (!k || k.getAttribute('data-laeuft') !== '1' || !window.fetch) { return; }
+	var feld = function (id) { return document.getElementById(id); };
+	var setze = function (el, t) { if (el) { el.textContent = t; } };
+	var gestoert = 0;
+	var takt = setInterval(function () {
+		if (document.hidden) { return; }
+		fetch('index.php?ajax=vorgang', { credentials: 'same-origin', cache: 'no-store' })
+			.then(function (a) { return a.ok ? a.json() : null; })
+			.then(function (d) {
+				if (!d || d.ok !== 1) { throw new Error('ohne Antwort'); }
+				gestoert = 0;
+				feld('asn_vl_stoerung').style.display = 'none';
+				k.className = d.warnung ? 'sm-warnung' : 'sm-hinweis';
+				k.style.display = '';
+				setze(feld('asn_vl_kopf'), d.kopf);
+				setze(feld('asn_vl_satz'), d.satz);
+				setze(feld('asn_vl_hinweis'), d.hinweis);
+				setze(feld('asn_kopf_vorgang'), d.satz !== '' ? d.satz : '-');
+				document.querySelectorAll('.asn-vorgang-satz').forEach(function (s) { s.textContent = d.satz; });
+				if (d.laeuft !== 1) {
+					clearInterval(takt);
+					feld('asn_vl_ende').style.display = '';
+					document.querySelectorAll('.asn-vorgang-knopf').forEach(function (b) { b.disabled = false; });
+				}
+			})
+			.catch(function () {
+				gestoert++;
+				if (gestoert >= 3) { feld('asn_vl_stoerung').style.display = ''; }
+			});
+	}, 3000);
 })();
 /* Speicherauswahl von LoxBerry (Bauart Chromecast4lox 1.3.25 Nachfassung 4): ihre Wahl (verstecktes Feld
  * asn_musik_wahl, das Widget loest dort ein jQuery-"change" aus) fuellt das Feld musik_pfad; ohne jQuery bleibt nur das Feld. */

@@ -134,6 +134,19 @@ function asn_test_zeilen()
     }
     $z[] = array($roh ? !$fehlt : null, asn_t('TEST.F_VOLLSTAENDIG'), asn_e($roh ? ($fehlt ? sprintf(asn_t('TEST.A_FEHLT'), implode(', ', $fehlt))
         : sprintf(asn_t('TEST.A_VOLL'), count(asn_vorgaben()))) : asn_t('TEST.A_KONFIG_LEER')));
+    /* 0.9.14 (Entscheidung des Hausherrn 15.11.2026): Einstellungen, die diese Fassung nicht kennt, bleiben beim Speichern
+     * und Vervollstaendigen stehen - hier mit Namen genannt (Hinweis, kein Kreuz), nie mit Wert. Dazu das Vervollstaendigen
+     * mit Wirkung an einer Probedatei im temporaeren Verzeichnis (die echte Konfiguration bleibt unberuehrt). */
+    $fremd = $roh ? asn_config_fremd($roh) : array();
+    $z[] = array($roh ? ($fremd ? null : true) : null, asn_t('TEST.F_FREMD'), asn_e(!$roh ? asn_t('TEST.A_KONFIG_LEER')
+        : ($fremd ? sprintf(asn_t('TEST.A_FREMD'), count($fremd), implode(', ', $fremd)) : asn_t('TEST.A_FREMD_KEINE'))));
+    list($st, $t) = asn_vervollstaendigen_probe();
+    $z[] = array($st === 1 ? true : ($st === -1 ? false : null), asn_t('TEST.F_VPROBE'), asn_e($t));
+    /* 0.9.14: Vorgangszustand (Fortschrittsanzeige): Datei stimmig, und ein haengengebliebener Vorgang wird erkannt. */
+    list($ok, $t) = asn_vorgang_datei_pruefen();
+    $z[] = array($ok, asn_t('TEST.F_VDATEI'), asn_e($t));
+    list($st, $t) = asn_vorgang_haenger_probe();
+    $z[] = array($st === 1 ? true : ($st === -1 ? false : null), asn_t('TEST.F_HAENGER'), asn_e($t));
     list($ok, $t) = asn_test_reiter_probe();
     $z[] = array($ok, asn_t('TEST.F_REITER'), asn_e($t));
     list($ok, $t) = asn_test_formulare_probe();
