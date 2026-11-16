@@ -1,14 +1,14 @@
 <?php
 /**
  * Audioserver NG - Hintergrundvorgang (Bauart Alexa NG bin/hue_vorgang.php): Container anlegen, Probe uebernehmen,
- * starten, stoppen, neu starten, Update, Rueckweg, Probe entfernen, Bibliothek einlesen.
+ * starten, stoppen, neu starten, Update, Rueckweg, Probe entfernen, Bibliothek einlesen, alte Datenordner aufraeumen (0.9.15).
  *
  * Gestartet von der Oberflaeche, vom Endpunkt und von der Befehlsbruecke ueber asn_vorgang_starten() (setsid). Im
  * Hintergrund, weil docker pull und das Kopieren eines Datenordners Minuten dauern koennen. Der Stand steht in
  * data/plugins/<ordner>/vorgang.json; ein zweiter Vorgang waehrend eines laufenden endet sofort (Sperrdatei mit
  * Prozessnummer, kein flock - die Sperre vererbte sich sonst an jedes Kind von proc_open, Regeln/03).
  *
- * Aufruf: php asn_vorgang.php anlegen|wechsel|starten|stoppen|neustart|update|rueckweg|probe_entfernen|bibliothek|favoriten|tunein
+ * Aufruf: php asn_vorgang.php anlegen|wechsel|starten|stoppen|neustart|update|rueckweg|probe_entfernen|bibliothek|favoriten|tunein|daten_aufraeumen
  */
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 ini_set('display_errors', '0');

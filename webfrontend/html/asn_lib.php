@@ -2452,6 +2452,520 @@ function asn_abbilder_aufraeumen()
     return array(true, '', $weg, $nein, $frei);
 }
 
+/* ---------------- 0.9.15: Alte Datenordner von sonn (nur auf Knopfdruck mit Ja, nie ab Werk) ----------------
+ * Entscheidung des Hausherrn 16.11.2026 ("Ja, bauen"). Gemessen am Code und in WSL (Attrappe mit Zustand, acht Vorgaenge
+ * hintereinander, Pruefung-Audioserver-NG-0.9.15/datenordner/): jedes Update kopiert in einen neuen daten_<12 Hex>, setzt
+ * datenordner_vorher auf den bisherigen und ueberschreibt damit den vorigen Rueckweg - ab dem zweiten Update liegt ein
+ * Ordner, auf den nichts mehr zeigt; ein gescheitertes Update oder Anlegen stellt seine Kopie als
+ * daten_<12 Hex>.gescheitert-<JahrMonatTagStundeMinuteSekunde> beiseite. Bis 0.9.14 wurde davon nie etwas geloescht.
+ * Die Dateien gehoeren root (der Container laeuft als root) - geloescht wird deshalb im Hilfscontainer aus dem schon
+ * geladenen Abbild, wie beim Kopieren (asn_daten_kopieren). */
+
+define('ASN_DATEN_RM_S', 600);                // Obergrenze fuer das Loeschen eines Datenordners
+define('ASN_DATEN_AUFTRAG_S', 600);           // so lange gilt die Liste, die mit dem Ja-Haken abgeschickt wurde
+define('ASN_DATEN_GROESSE_MAX', 200000);      // hoechstens so viele Eintraege je Ordner werden fuer die Groesse gezaehlt
+
+/** Namensmuster im Datenbereich: 'daten' (daten_<12 Hex>), 'gescheitert' (... .gescheitert-<14 Ziffern>), sonst ''. */
+function asn_datenordner_muster($n)
+{
+    if (!is_string($n)) {
+        return '';
+    }
+    if (preg_match('/^daten_[0-9a-f]{12}\z/', $n) === 1) {
+        return 'daten';
+    }
+    return preg_match('/^daten_[0-9a-f]{12}\.gescheitert-[0-9]{14}\z/', $n) === 1 ? 'gescheitert' : '';
+}
+
+/**
+ * Groesse eines Ordners: Summe der Dateigroessen, Verknuepfungen werden nicht verfolgt (lstat), hoechstens
+ * ASN_DATEN_GROESSE_MAX Eintraege. Rueckgabe array(byte, vollstaendig) - vollstaendig false, wenn ein Unterordner nicht
+ * lesbar war (Dateien von root) oder die Grenze erreicht wurde; die Zahl ist dann eine Untergrenze.
+ */
+function asn_ordner_groesse($pfad)
+{
+    $byte = 0;
+    $voll = true;
+    $n = 0;
+    $stapel = array($pfad);
+    while ($stapel) {
+        $d = array_pop($stapel);
+        $h = @opendir($d);
+        if ($h === false) {
+            $voll = false;
+            continue;
+        }
+        while (($e = readdir($h)) !== false) {
+            if ($e === '.' || $e === '..') {
+                continue;
+            }
+            if (++$n > ASN_DATEN_GROESSE_MAX) {
+                $voll = false;
+                break 2;
+            }
+            $p = $d . '/' . $e;
+            $st = @lstat($p);
+            if ($st === false) {
+                $voll = false;
+                continue;
+            }
+            $typ = $st['mode'] & 0170000;
+            if ($typ === 0040000) {
+                $stapel[] = $p;
+            } else {
+                $byte += (int) $st['size'];
+            }
+        }
+        closedir($h);
+    }
+    if (isset($h) && is_resource($h)) {
+        closedir($h);
+    }
+    return array($byte, $voll);
+}
+
+/**
+ * Welche Eintraege des Datenbereichs benutzt ein Container? $quellen: die Quellpfade aller Einhaengungen aller Container
+ * (laufend oder gestoppt). Rueckgabe array(alles, namen): alles = ein Container haengt den Datenbereich selbst oder einen
+ * Ordner darueber ein (dann gilt jeder Eintrag als in Gebrauch); namen = Eintraege, in die oder unter die eingehaengt ist.
+ * Verglichen wird mit dem Pfad wie eingestellt und mit dem aufgeloesten (realpath), beide Seiten.
+ */
+function asn_datenordner_aus_quellen($sonn, array $quellen)
+{
+    $basen = array(rtrim(str_replace('\\', '/', $sonn), '/'));
+    $r = @realpath($sonn);
+    if ($r !== false) {
+        $basen[] = rtrim(str_replace('\\', '/', $r), '/');
+    }
+    $alles = false;
+    $namen = array();
+    foreach ($quellen as $q) {
+        if (!is_string($q) || $q === '') {
+            continue;
+        }
+        $pfade = array(rtrim(str_replace('\\', '/', $q), '/'));
+        $rq = @realpath($q);
+        if ($rq !== false) {
+            $pfade[] = rtrim(str_replace('\\', '/', $rq), '/');
+        }
+        foreach ($pfade as $p) {
+            foreach (array_unique($basen) as $b) {
+                if ($p === '' || $p === $b || strpos($b . '/', $p . '/') === 0) {
+                    $alles = true;
+                } elseif (strpos($p, $b . '/') === 0) {
+                    $teil = explode('/', substr($p, strlen($b) + 1));
+                    $namen[$teil[0]] = true;
+                }
+            }
+        }
+    }
+    return array($alles, $namen);
+}
+
+/**
+ * Die Eintraege des Datenbereichs bewerten (nur lesend). Gelistet werden nur Namen nach asn_datenordner_muster(); der
+ * Ordner musik/ und alles andere bleibt aussen vor. art je Eintrag:
+ *   gebrauch    - der eingestellte Datenordner (ohne Einstellung der aus dem Digest, wie asn_soll()) oder von einem
+ *                 Container eingehaengt;
+ *   rueckweg    - datenordner_vorher (geschuetzt, solange er eingestellt ist - auch wenn abbild_vorher fehlen sollte);
+ *   unklar      - kein gewoehnlicher Ordner (Verknuepfung, Datei): wird nie angefasst;
+ *   gescheitert - Rest eines gescheiterten Vorgangs;
+ *   verwaist    - daten_<12 Hex>, auf den nichts zeigt.
+ * Nur 'gescheitert' und 'verwaist' sind entfernbar. Rueckgabe Liste von array(name, art, groesse, vollstaendig, datum).
+ */
+function asn_datenordner_bewerten($sonn, array $cfg, array $quellen)
+{
+    $liste = array();
+    $inhalt = (is_dir($sonn) && !is_link($sonn)) ? @scandir($sonn) : array();
+    if (!is_array($inhalt)) {
+        return $liste;
+    }
+    $gebrauch = array();
+    $n = isset($cfg['datenordner']) && asn_datenordner_gueltig($cfg['datenordner']) ? $cfg['datenordner'] : '';
+    if ($n === '' && isset($cfg['abbild'], $cfg['datenordner'])) {
+        $k = asn_kurzdigest(asn_abbild_digest($cfg));
+        $n = $k !== '' ? 'daten_' . $k : '';
+    }
+    if ($n !== '') {
+        $gebrauch[$n] = true;
+    }
+    list($alles, $eingehaengt) = asn_datenordner_aus_quellen($sonn, $quellen);
+    $gebrauch += $eingehaengt;
+    $rueckweg = isset($cfg['datenordner_vorher']) && asn_datenordner_gueltig($cfg['datenordner_vorher']) ? $cfg['datenordner_vorher'] : '';
+    foreach ($inhalt as $e) {
+        $muster = asn_datenordner_muster($e);
+        if ($muster === '') {
+            continue;
+        }
+        $p = $sonn . '/' . $e;
+        $st = @lstat($p);
+        $ordner = $st !== false && ($st['mode'] & 0170000) === 0040000;
+        if ($alles || isset($gebrauch[$e])) {
+            $art = 'gebrauch';
+        } elseif ($e === $rueckweg) {
+            $art = 'rueckweg';
+        } elseif (!$ordner) {
+            $art = 'unklar';
+        } else {
+            $art = $muster === 'gescheitert' ? 'gescheitert' : 'verwaist';
+        }
+        list($gr, $voll) = $ordner ? asn_ordner_groesse($p) : array(0, true);
+        $liste[] = array('name' => $e, 'art' => $art, 'groesse' => $gr, 'vollstaendig' => $voll,
+                         'datum' => $st !== false ? date('Y-m-d H:i', (int) $st['mtime']) : '');
+    }
+    usort($liste, function ($a, $b) {
+        return strcmp($b['datum'] . $b['name'], $a['datum'] . $a['name']);
+    });
+    return $liste;
+}
+
+/**
+ * Darf dieser Eintrag geloescht werden? '' ja, sonst der Grund. Streng und geschlossen: Name nach dem Muster, in der
+ * frisch bewerteten Liste als entfernbar, Datenbereich selbst keine Verknuepfung, der Eintrag ein gewoehnlicher Ordner
+ * (keine Verknuepfung - lstat), Pfade ohne ":" und absolut (sonst deutet docker -v sie anders).
+ */
+function asn_datenordner_loeschbar($sonn, $name, array $liste)
+{
+    if (asn_datenordner_muster($name) === '') {
+        return 'DATEN_NAME';
+    }
+    $e = null;
+    foreach ($liste as $x) {
+        if ($x['name'] === $name) {
+            $e = $x;
+        }
+    }
+    if ($e === null) {
+        return 'DATEN_FORT|' . $name;
+    }
+    if (!in_array($e['art'], array('verwaist', 'gescheitert'), true)) {
+        return 'DATEN_GESCHUETZT|' . $name . '|' . asn_t('DATENORDNER.ART_' . strtoupper($e['art']));
+    }
+    clearstatcache();
+    $s = (string) $sonn;
+    if ($s === '' || is_link(rtrim($s, '/')) || !is_dir($s)) {
+        return 'DATEN_BEREICH|' . basename($s);
+    }
+    $st = @lstat($s . '/' . $name);
+    if ($st === false || ($st['mode'] & 0170000) !== 0040000) {
+        return 'DATEN_KEIN_ORDNER|' . $name;
+    }
+    if (DIRECTORY_SEPARATOR === '/' && (strpos($s, ':') !== false || strpos($s, ',') !== false || $s[0] !== '/')) {
+        return 'DATEN_BEREICH|' . basename($s);     // nur Linux: docker -v braucht einen absoluten Pfad ohne ":" (Windows: Pruefstand ohne Docker)
+    }
+    return '';
+}
+
+/**
+ * Einen alten Datenordner entfernen - die EINE Stelle, durch die jedes Loeschen geht (Vorgang und Pruefzeile): erst
+ * asn_datenordner_loeschbar(), dann $rm($sonn, $name) (Vorgang: Hilfscontainer "rm -rf"; Pruefzeile: Probebaum im
+ * temporaeren Verzeichnis), danach auf der Platte nachgesehen. Rueckgabe array(stand, grund, text): stand 'nicht'
+ * (abgewiesen, grund), 'weg' oder 'liegt' (grund = Rueckgabe von $rm).
+ */
+function asn_datenordner_entfernen($sonn, $name, array $liste, $rm)
+{
+    $g = asn_datenordner_loeschbar($sonn, $name, $liste);
+    if ($g !== '') {
+        return array('nicht', $g, '');
+    }
+    list($rc, $t) = $rm($sonn, $name);
+    clearstatcache();
+    $pfad = $sonn . '/' . $name;
+    return (!file_exists($pfad) && !is_link($pfad)) ? array('weg', '', '') : array('liegt', (string) (int) $rc, (string) $t);
+}
+
+/**
+ * Die Lage der alten Datenordner. $docker: Docker nach den Einhaengungen aller Container fragen (sonst nur die
+ * Einstellungen - die Oberflaeche zeigt das dazu). Faellt die Docker-Frage aus, ist die Lage nicht feststellbar (kein
+ * Aufraeumen). Rueckgabe array(ok, grund, liste, frei, docker_gefragt).
+ */
+function asn_datenordner_lage($docker)
+{
+    $sonn = asn_paths()['sonn'];
+    if (is_link(rtrim($sonn, '/'))) {
+        return array(false, 'DATEN_BEREICH|' . basename($sonn), array(), 0, false);
+    }
+    $quellen = array();
+    if ($docker) {
+        list($dl, $dg) = asn_docker_lage();
+        if ($dl !== 'ok') {
+            return array(false, $dg, array(), 0, true);
+        }
+        list($rc, $out) = asn_docker(array('ps', '-a', '--no-trunc', '--format', '{{.ID}}'), 20);
+        if ($rc !== 0) {
+            return array(false, 'DOCKER_FEHLER|' . (int) $rc, array(), 0, true);
+        }
+        $ids = array_values(array_filter(array_map('trim', preg_split('/\r?\n/', (string) $out)), 'strlen'));
+        if ($ids) {
+            list($rc, $out) = asn_docker(array_merge(array('container', 'inspect'), $ids), 20);
+            $info = json_decode((string) $out, true);
+            if ($rc !== 0 || !is_array($info) || count($info) !== count($ids)) {
+                return array(false, 'DOCKER_FEHLER|' . (int) $rc, array(), 0, true);
+            }
+            foreach ($info as $c) {
+                foreach ((is_array($c) && isset($c['Mounts']) && is_array($c['Mounts'])) ? $c['Mounts'] : array() as $m) {
+                    if (is_array($m) && isset($m['Source']) && is_string($m['Source'])) {
+                        $quellen[] = $m['Source'];
+                    }
+                }
+            }
+        }
+    }
+    $liste = asn_datenordner_bewerten($sonn, asn_config(false), $quellen);
+    $frei = 0;
+    foreach ($liste as $e) {
+        if (in_array($e['art'], array('verwaist', 'gescheitert'), true)) {
+            $frei += $e['groesse'];
+        }
+    }
+    return array(true, '', $liste, $frei, (bool) $docker);
+}
+
+/**
+ * Hintergrundvorgang "daten_aufraeumen": loescht die Ordner, die mit dem Ja-Haken abgeschickt wurden
+ * (data/.../daten_aufraeumen.json, hoechstens ASN_DATEN_AUFTRAG_S alt) - und davon nur die, die JETZT noch entfernbar
+ * sind (frisch bewertet, mit Docker). Je Ordner ein Hilfscontainer "rm -rf" aus dem geladenen Abbild (kein Laden),
+ * danach nachgesehen, ob der Ordner fort ist. Rueckgabe array(ok, grund, text "entfernt|byte|uebersprungen", ergebnis).
+ */
+function asn_daten_aufraeumen($schritt)
+{
+    $p = asn_paths();
+    $datei = $p['datadir'] . '/daten_aufraeumen.json';
+    $auftrag = asn_json_lesen($datei);
+    @unlink($datei);
+    $namen = (isset($auftrag['namen']) && is_array($auftrag['namen'])) ? array_values(array_unique($auftrag['namen'], SORT_REGULAR)) : array();
+    if (!$namen || count($namen) > 200 || !isset($auftrag['zeit']) || !is_int($auftrag['zeit'])
+        || abs(time() - $auftrag['zeit']) > ASN_DATEN_AUFTRAG_S) {
+        return array(false, 'DATEN_AUFTRAG', '', '');
+    }
+    foreach ($namen as $n) {
+        if (asn_datenordner_muster($n) === '') {
+            return array(false, 'DATEN_AUFTRAG', '', '');
+        }
+    }
+    $cfg = asn_config();
+    if (empty($cfg['container_ein'])) {
+        return array(false, 'VERWALTUNG_AUS', '', '');
+    }
+    $schritt('pruefen');
+    list($ok, $g, $liste) = asn_datenordner_lage(true);
+    if (!$ok) {
+        return array(false, $g, '', '');
+    }
+    $bild = asn_abbild_ref(asn_abbild_digest($cfg));
+    if ($bild === '') {
+        return array(false, 'ABBILD_VORGABE', '', '');
+    }
+    list($rc, , ) = asn_docker(array('image', 'inspect', $bild), 30);
+    if ($rc !== 0) {
+        return array(false, 'DATEN_ABBILD_FEHLT|' . asn_kurzdigest(asn_abbild_digest($cfg)), '', '');
+    }
+    $schritt('loeschen');
+    $sonn = $p['sonn'];
+    $weg = 0;
+    $nein = 0;
+    $ueber = 0;
+    $frei = 0;
+    $rm = function ($bereich, $n) use ($bild, $p) {
+        list($rc, $out, $err) = asn_docker(array('run', '--rm', '--network', 'none',
+            '--label', 'de.loxberry.plugin.folder=' . $p['plugin'],
+            '-v', $bereich . ':/sonn', '--entrypoint', 'rm', $bild, '-rf', '--', '/sonn/' . $n), ASN_DATEN_RM_S);
+        return array($rc, $rc !== 0 ? asn_kurztext(asn_letzte_zeile($err . "\n" . $out), 160) : '');
+    };
+    foreach ($namen as $n) {
+        $gr = 0;
+        $voll = true;
+        foreach ($liste as $x) {
+            if ($x['name'] === $n) {
+                $gr = $x['groesse'];
+                $voll = $x['vollstaendig'];
+            }
+        }
+        list($stand, $gl, $t) = asn_datenordner_entfernen($sonn, $n, $liste, $rm);
+        if ($stand === 'nicht') {
+            $ueber++;
+            asn_log('Alte Datenordner: ' . $n . ' nicht angefasst - ' . asn_grund_text($gl));
+        } elseif ($stand === 'weg') {
+            $weg++;
+            $frei += $gr;
+            asn_log('Alte Datenordner: ' . $n . ' geloescht (' . ($voll ? '' : 'mindestens ') . asn_mb($gr) . ').');
+        } else {
+            $nein++;
+            asn_log('Alte Datenordner: ' . $n . ' liegt noch da (Rueckgabe ' . $gl . ($t !== '' ? ': ' . $t : '') . ').');
+        }
+    }
+    if ($nein > 0) {
+        return array(false, 'DATEN_NICHT_ALLE|' . $weg . '|' . asn_mb($frei) . '|' . $nein, '', '');
+    }
+    return array(true, '', $weg . '|' . $frei . '|' . $ueber, 'DATEN_AUFGERAEUMT');
+}
+
+/** Der Ergebnissatz zu "daten_aufraeumen" (Zahlen aus dem Textfeld des Vorgangs). */
+function asn_daten_ergebnis_text($text)
+{
+    if (!preg_match('/^([0-9]+)\|([0-9]+)\|([0-9]+)\z/', (string) $text, $m)) {
+        return asn_t('ERGEBNIS.DATEN_AUFGERAEUMT_OHNE');
+    }
+    $t = sprintf(asn_t('ERGEBNIS.DATEN_AUFGERAEUMT'), (int) $m[1], asn_mb((int) $m[2]));
+    return (int) $m[3] > 0 ? $t . '; ' . sprintf(asn_t('ERGEBNIS.DATEN_UEBERSPRUNGEN'), (int) $m[3]) : $t;
+}
+
+/**
+ * Pruefzeile (Reiter Test): Schutz und Pfadpruefung des Aufraeumens an einer PROBE im temporaeren Verzeichnis - der echte
+ * Datenbereich bleibt unberuehrt (gemessen werden asn_datenordner_bewerten() und asn_datenordner_entfernen(), dieselben
+ * Stellen wie im Vorgang; nur das eigentliche Loeschen geschieht im Probebaum statt im Hilfscontainer). Verlangt: der eingestellte, der aus dem Digest
+ * folgende, der eingehaengte und der Rueckweg-Ordner sind geschuetzt, ein eingehaengter Datenbereich schuetzt alles,
+ * Verknuepfung, Datei, fremder Name und ein Datenbereich hinter einer Verknuepfung werden abgewiesen, verwaist und
+ * gescheitert sind entfernbar. Rueckgabe array(stand, Text): 1 ja, -1 nein, 0 nicht messbar.
+ */
+function asn_datenordner_schutz_probe()
+{
+    $wurzel = rtrim(str_replace('\\', '/', sys_get_temp_dir()), '/') . '/asn_dprobe_' . getmypid() . '_' . mt_rand(100000, 999999);
+    $sonn = $wurzel . '/sonn';
+    $a = 'daten_aaaaaaaaaaaa';
+    $b = 'daten_bbbbbbbbbbbb';
+    $c = 'daten_cccccccccccc';
+    $dg = 'daten_dddddddddddd.gescheitert-20261116000000';
+    $e = 'daten_eeeeeeeeeeee';
+    $f = 'daten_ffffffffffff';
+    $datei = 'daten_999999999999';
+    $angelegt = @mkdir($sonn . '/' . $a, 0700, true) && @mkdir($sonn . '/' . $b, 0700) && @mkdir($sonn . '/' . $c . '/unter', 0700, true)
+        && @mkdir($sonn . '/' . $dg, 0700) && @mkdir($sonn . '/' . $e, 0700) && @mkdir($sonn . '/musik', 0700)
+        && @mkdir($wurzel . '/aussen', 0700) && @file_put_contents($sonn . '/' . $c . '/unter/x.bin', str_repeat('x', 1000)) === 1000
+        && @file_put_contents($sonn . '/' . $datei, 'x') === 1;
+    $links = $angelegt && @symlink($wurzel . '/aussen', $sonn . '/' . $f) && @symlink($sonn, $wurzel . '/sonn_link');
+    $mangel = array();
+    $faelle = 0;
+    if ($angelegt) {
+        $cfg = array('abbild' => '', 'abbild_vorher' => '', 'datenordner' => $a, 'datenordner_vorher' => $b);
+        $art = function (array $l) {
+            $r = array();
+            foreach ($l as $x) {
+                $r[$x['name']] = $x['art'];
+            }
+            return $r;
+        };
+        $l1 = asn_datenordner_bewerten($sonn, $cfg, array($sonn . '/' . $e . '/'));
+        $r1 = $art($l1);
+        $soll = array($a => 'gebrauch', $b => 'rueckweg', $c => 'verwaist', $dg => 'gescheitert', $e => 'gebrauch', $datei => 'unklar');
+        if ($links) {
+            $soll[$f] = 'unklar';
+        }
+        foreach ($soll as $n => $s) {
+            $faelle++;
+            if (!isset($r1[$n]) || $r1[$n] !== $s) {
+                $mangel[] = $n . '=' . (isset($r1[$n]) ? $r1[$n] : '-') . '/' . $s;
+            }
+        }
+        $faelle++;
+        if (isset($r1['musik'])) {
+            $mangel[] = 'musik gelistet';
+        }
+        $faelle++;
+        foreach ($l1 as $x) {
+            if ($x['name'] === $c && ($x['groesse'] !== 1000 || !$x['vollstaendig'])) {
+                $mangel[] = $c . ' Groesse ' . $x['groesse'];
+            }
+        }
+        // Ohne eingestellten Datenordner gilt der aus dem Digest (wie asn_soll()); ein eingehaengter Datenbereich schuetzt alles.
+        $r2 = $art(asn_datenordner_bewerten($sonn, array('abbild' => 'sha256:' . str_repeat('a', 64), 'abbild_vorher' => '',
+            'datenordner' => '', 'datenordner_vorher' => ''), array()));
+        $faelle++;
+        if (!isset($r2[$a]) || $r2[$a] !== 'gebrauch') {
+            $mangel[] = $a . '=' . (isset($r2[$a]) ? $r2[$a] : '-') . '/gebrauch (Digest)';
+        }
+        $r3 = $art(asn_datenordner_bewerten($sonn, array('abbild' => '', 'abbild_vorher' => '', 'datenordner' => $a,
+            'datenordner_vorher' => ''), array($sonn)));
+        $faelle++;
+        if (!isset($r3[$c]) || $r3[$c] !== 'gebrauch') {
+            $mangel[] = $c . '=' . (isset($r3[$c]) ? $r3[$c] : '-') . '/gebrauch (Bereich eingehaengt)';
+        }
+        // Entfernen ueber dieselbe Stelle wie der Vorgang (asn_datenordner_entfernen), geloescht wird hier im Probebaum.
+        // Zuerst mit einer Liste, die (veraltet oder verfaelscht) jeden Eintrag als entfernbar fuehrt: dann haengt alles an
+        // der Pfadpruefung (Name, Datenbereich, lstat) - es darf nichts verschwinden.
+        $rm = function ($bereich, $n) {
+            asn_baum_weg($bereich . '/' . $n);
+            return array(0, '');
+        };
+        $da = function ($p) {
+            clearstatcache();
+            return file_exists($p) || is_link($p);
+        };
+        $falsch = array();
+        foreach (array($c, $datei, 'musik', '../aussen', $f) as $n) {
+            $falsch[] = array('name' => $n, 'art' => 'verwaist', 'groesse' => 0, 'vollstaendig' => true, 'datum' => '');
+        }
+        $pruef = array(array($sonn, $datei, $sonn . '/' . $datei), array($sonn, 'musik', $sonn . '/musik'),
+                       array($sonn, '../aussen', $wurzel . '/aussen'));
+        if ($links) {
+            $pruef[] = array($sonn, $f, $sonn . '/' . $f);
+            $pruef[] = array($wurzel . '/sonn_link', $c, $sonn . '/' . $c);
+        }
+        if (DIRECTORY_SEPARATOR === '/' && @mkdir($wurzel . '/so:nn/' . $c, 0700, true)) {
+            $pruef[] = array($wurzel . '/so:nn', $c, $wurzel . '/so:nn/' . $c);
+        }
+        foreach ($pruef as $x) {
+            $faelle++;
+            list($stand) = asn_datenordner_entfernen($x[0], $x[1], $falsch, $rm);
+            if ($stand !== 'nicht' || !$da($x[2])) {
+                $mangel[] = 'abgewiesen ' . ($x[0] === $sonn ? $x[1] : ($x[0] === $wurzel . '/so:nn' ? 'Bereich mit Doppelpunkt'
+                    : 'Bereich hinter Verknuepfung'));
+            }
+        }
+        // Ein Loeschen, das Erfolg meldet und nichts tut, zaehlt nicht als geloescht (nachgesehen wird auf der Platte).
+        $faelle++;
+        list($stand) = asn_datenordner_entfernen($sonn, $c, $l1, function () {
+            return array(0, '');
+        });
+        if ($stand !== 'liegt' || !$da($sonn . '/' . $c)) {
+            $mangel[] = 'Erfolg ohne Wirkung ' . $stand;
+        }
+        // Dann mit der frisch bewerteten Liste: verwaist und gescheitert verschwinden, alles andere bleibt.
+        foreach (array($a => false, $b => false, $e => false, $datei => false, $c => true, $dg => true) as $n => $weg) {
+            $faelle++;
+            list($stand) = asn_datenordner_entfernen($sonn, $n, $l1, $rm);
+            if (($stand === 'weg') !== $weg || $da($sonn . '/' . $n) === $weg) {
+                $mangel[] = 'entfernt ' . $n . ($weg ? ' nein' : ' ja');
+            }
+        }
+    }
+    asn_baum_weg($wurzel);
+    if (!$angelegt) {
+        return array(0, asn_t('TEST.A_DSCHUTZ_NICHT'));
+    }
+    if ($mangel) {
+        return array(-1, sprintf(asn_t('TEST.A_DSCHUTZ_FEHL'), implode('; ', $mangel)));
+    }
+    if (!$links) {
+        return array(0, sprintf(asn_t('TEST.A_DSCHUTZ_OHNE_LINK'), $faelle));
+    }
+    return array(1, sprintf(asn_t('TEST.A_DSCHUTZ_OK'), $faelle));
+}
+
+/** Einen Probebaum im temporaeren Verzeichnis entfernen (Verknuepfungen werden entfernt, nicht verfolgt). */
+function asn_baum_weg($pfad)
+{
+    $n = str_replace('\\', '/', $pfad);
+    if (strpos($n, rtrim(str_replace('\\', '/', sys_get_temp_dir()), '/') . '/asn_') !== 0 || strpos($n . '/', '/../') !== false) {
+        return;     // nur eigene Probebaeume, nie ueber ".." hinaus
+    }
+    if (is_link($pfad) || is_file($pfad)) {
+        if (!@unlink($pfad)) {
+            @rmdir($pfad);      // Windows: eine Verknuepfung auf einen Ordner geht nur mit rmdir weg
+        }
+        return;
+    }
+    if (!is_dir($pfad)) {
+        return;
+    }
+    foreach ((array) @scandir($pfad) as $e) {
+        if ($e !== '.' && $e !== '..') {
+            asn_baum_weg($pfad . '/' . $e);
+        }
+    }
+    @rmdir($pfad);
+}
+
 /* ---------------- Verfuegbare Fassungen auf ghcr.io (nur lesend, anonym, Zwischenspeicher) ---------------- */
 
 /** Die Registry: ghcr.io - im Pruefstand eine Attrappe auf 127.0.0.1 (ASN_REGISTRY_ATTRAPPE). */
@@ -2794,7 +3308,7 @@ function asn_log_wenn_neu($schluessel, $lage, $text)
 function asn_vorgaenge()
 {
     return array('anlegen', 'starten', 'stoppen', 'neustart', 'wechsel', 'update', 'rueckweg', 'probe_entfernen', 'bibliothek',
-                 'favoriten', 'tunein');
+                 'favoriten', 'tunein', 'daten_aufraeumen');
 }
 
 /** Der Stand des Hintergrundvorgangs (data/.../vorgang.json; 0.9.14: $datei fuer die Probe im Reiter Test). */
@@ -2906,6 +3420,9 @@ function asn_vorgang_ausfuehren($auftrag)
         case 'tunein':
             $r = asn_tunein_vorgang($schritt);
             break;
+        case 'daten_aufraeumen':
+            $r = asn_daten_aufraeumen($schritt);   // 0.9.15: nur auf Knopfdruck mit Ja (Reiter Einstellungen)
+            break;
         default:
             $r = array(false, 'VORGANG', '', '');
     }
@@ -2934,8 +3451,9 @@ function asn_vorgang_satz(array $v)
             $v['start'] > 0 ? date('H:i:s', $v['start']) : '-', $v['schritt'] !== '' ? asn_schritt_text($v['schritt']) : asn_t('SCHRITT.START'));
     }
     if ($v['zustand'] === 'fertig') {
-        return sprintf(asn_t('VORGANG.FERTIG'), $was, asn_t('ERGEBNIS.' . preg_replace('/[^A-Z_]/', '', strtoupper($v['ergebnis']))),
-            date('Y-m-d H:i:s', $v['ende']));
+        $erg = $v['ergebnis'] === 'DATEN_AUFGERAEUMT' ? asn_daten_ergebnis_text($v['text'])     // 0.9.15: mit Anzahl und Groesse
+            : asn_t('ERGEBNIS.' . preg_replace('/[^A-Z_]/', '', strtoupper($v['ergebnis'])));
+        return sprintf(asn_t('VORGANG.FERTIG'), $was, $erg, date('Y-m-d H:i:s', $v['ende']));
     }
     if ($v['zustand'] === 'abgebrochen') {
         return sprintf(asn_t('VORGANG.ABGEBROCHEN'), $was, $v['schritt'] !== '' ? asn_schritt_text($v['schritt']) : '-');

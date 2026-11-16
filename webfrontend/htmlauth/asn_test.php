@@ -147,6 +147,10 @@ function asn_test_zeilen()
     $z[] = array($ok, asn_t('TEST.F_VDATEI'), asn_e($t));
     list($st, $t) = asn_vorgang_haenger_probe();
     $z[] = array($st === 1 ? true : ($st === -1 ? false : null), asn_t('TEST.F_HAENGER'), asn_e($t));
+    /* 0.9.15: Aufraeumen alter Datenordner - Schutz (in Gebrauch, Rueckweg) und Pfadpruefung an einer Probe im
+     * temporaeren Verzeichnis; der echte Datenbereich bleibt unberuehrt, geloescht wird nur im Probebaum. */
+    list($st, $t) = asn_datenordner_schutz_probe();
+    $z[] = array($st === 1 ? true : ($st === -1 ? false : null), asn_t('TEST.F_DSCHUTZ'), asn_e($t));
     list($ok, $t) = asn_test_reiter_probe();
     $z[] = array($ok, asn_t('TEST.F_REITER'), asn_e($t));
     list($ok, $t) = asn_test_formulare_probe();
@@ -213,6 +217,18 @@ function asn_test_docker_zeilen()
     if ($dl !== 'ok') {
         return $z;
     }
+    /* 0.9.15: alte Datenordner (verwaist, gescheitert) als Hinweis mit Anzahl und Groesse - aufgeraeumt wird nur mit dem
+     * Knopf im Reiter Einstellungen. Docker beantwortet, welcher Container welchen Ordner benutzt. */
+    list($dok, $dgr, $dli, $dfrei) = asn_datenordner_lage(true);
+    $dalt = array();
+    foreach ($dok ? $dli : array() as $de) {
+        if (in_array($de['art'], array('verwaist', 'gescheitert'), true)) {
+            $dalt[] = $de['name'];
+        }
+    }
+    $z[] = array($dok ? ($dalt ? null : true) : null, asn_t('TEST.F_DALT'), asn_e(!$dok ? asn_grund_text($dgr)
+        : ($dalt ? sprintf(asn_t('TEST.A_DALT'), count($dalt), asn_mb($dfrei), implode(', ', $dalt))
+        : sprintf(asn_t('TEST.A_DALT_KEINE'), count($dli)))));
     list($pda, $pk) = asn_probe();
     if ($pda === true) {
         $pn = array_keys($pk['netze']);

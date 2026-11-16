@@ -10,7 +10,7 @@ DLNA/UPnP, Snapcast, Sendspin, Squeezelite, Music-Assistant-Player); mit diesem 
 **Amazon Echo wird nicht unterstützt** – sonn core 4.0.0-beta.22 hat keinen Ausgang für Echo/Alexa (Bluetooth nur als
 Eingang). Für Ansagen und Radio auf Echo-Geräten gibt es das Plugin [Alexa NG](https://wiki.loxberry.de/plugins/alexang/start).
 
-Version 0.9.14 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.15 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
 **Stand 0.9.3:** vierte Fassung (0.9.0 bis 0.9.2 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
@@ -19,6 +19,37 @@ Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
 
 ---
+
+## Neu in 0.9.15
+
+- **Alte Datenordner von sonn aufräumen, nur auf Knopfdruck.** Jedes Update kopiert die Daten von sonn in einen neuen
+  Ordner `daten_<Kennung>` unter `data/plugins/audioserverng.sonn/`; der bisherige bleibt als Rückweg. Ab dem zweiten
+  Update bleibt dabei ein Ordner liegen, auf den nichts mehr zeigt, und ein gescheitertes Update oder Anlegen stellt
+  seine Kopie als `daten_<Kennung>.gescheitert-<Zeit>` beiseite. Bis 0.9.14 wurde davon nie etwas gelöscht. Neu im
+  Reiter Einstellungen ist der Abschnitt „Alte Datenordner von sonn“: „Datenordner ansehen“ zeigt jeden Datenordner mit
+  Größe, Datum der letzten Änderung und Bewertung (in Gebrauch, Rückweg, verwaist, Rest eines gescheiterten Vorgangs).
+  „Alte Datenordner aufräumen“ mit Ja-Haken löscht im Hintergrund nur die verwaisten und gescheiterten; der Kasten der
+  Fortschrittsanzeige nennt am Ende die Zahl der gelöschten Ordner und den frei gewordenen Platz.
+- **Was nie gelöscht wird:** der eingestellte Datenordner, jeder Ordner, den ein Container eingehängt hat (laufend oder
+  angehalten), und der Rückweg-Ordner. Eine Verknüpfung oder Datei mit passendem Namen wird gezeigt, aber nie
+  angefasst; der Ordner `musik` und alles mit anderem Namen erscheint gar nicht. Gelöscht wird nur, was beim Druck auf
+  den Knopf in der Liste stand und im Augenblick des Löschens noch entfernbar ist – dafür fragt das Plugin Docker nach
+  den Einhängungen aller Container; antwortet Docker nicht, wird nichts gelöscht. Die Dateien gehören root (sonn läuft
+  im Container als root), deshalb löscht wie beim Kopieren ein Hilfscontainer aus dem schon geladenen Abbild, ohne
+  Netz. Fehlt dieses Abbild, wird nichts geladen und nichts gelöscht. Nach jedem Ordner sieht das Plugin auf der Platte
+  nach, ob er wirklich fort ist.
+- **Ab Werk passiert nichts.** Es gibt kein selbsttätiges Aufräumen. Ohne eingeschaltete Container-Verwaltung zeigt die
+  Liste nur die Bewertung nach den Einstellungen und keinen Knopf.
+- **Reiter Test, zwei neue Zeilen:** „Aufräumen alter Datenordner schützt den Ordner in Gebrauch und den Rückweg“,
+  gemessen an einer Probe im temporären Verzeichnis (unter Linux 24 Fälle; der echte Datenbereich bleibt unberührt),
+  und „Alte Datenordner von sonn“ als Hinweis mit Anzahl, Größe und Namen.
+- **Bekannt, nicht geändert:** Ein Update auf eine Fassung, deren Datenordner noch daliegt – etwa nach einem Rückweg
+  wieder vorwärts auf dieselbe Fassung –, endet wie bisher mit „Der Zielordner … ist nicht leer – es wird nichts
+  überschrieben“. Liegt der Ordner verwaist, hilft jetzt das Aufräumen; ist er der Rückweg, führt der Knopf „Rückweg“
+  dorthin.
+- Nicht auf einem LoxBerry gemessen: das Löschen mit dem echten Docker und dem echten Abbild von sonn core
+  (nachgestellt in WSL mit einer Docker-Attrappe; `rm` stammt wie das beim Kopieren benutzte `cp` aus dem
+  Debian-Unterbau des Abbilds – das ist ein Schluss aus der Geschichte des Abbilds, nicht am Abbild gemessen).
 
 ## Neu in 0.9.14
 
@@ -269,6 +300,9 @@ Kasten „Audioserver einrichten“ oben im Reiter Einstellungen, Ja-Haken setze
 - **Alte Abbilder aufräumen:** „Abbilder ansehen“ zeigt alle Abbilder von sonn core auf dem LoxBerry und den Platz,
   der frei würde. Nach Ja entfernt das Plugin nur Abbilder dieses Repos, die weder die aktuelle noch die vorherige
   Fassung sind und die kein Container benutzt – mit `docker image rm`, nie mit `-f`.
+- **Alte Datenordner aufräumen (ab 0.9.15):** „Datenordner ansehen“ zeigt die Datenordner von sonn mit Größe, Datum und
+  Bewertung. Nach Ja löscht das Plugin nur verwaiste Ordner und Reste gescheiterter Vorgänge – nie den Ordner in
+  Gebrauch, nie den Rückweg, nie einen Ordner, den ein Container eingehängt hat.
 - **Netz:** sonn hängt **nur** in einem macvlan-Netz (eigene Adresse im Heimnetz). Ein vorhandenes macvlan-Netz an
   derselben Schnittstelle wird mitbenutzt (und nie verändert), sonst legt das Plugin ein eigenes an.
 - **Feste IP und MAC** aus der Oberfläche. Aus der MAC folgt die **Seriennummer**, die Loxone Config für das

@@ -329,6 +329,39 @@ if ($asn_post) {
             }
             break;
 
+        case 'datenordner':
+            /* 0.9.15 (Entscheidung des Hausherrn 16.11.2026): alte Datenordner von sonn - nur mit Ja-Haken, nur mit
+             * Container-Verwaltung (Docker sagt, welcher Container welchen Ordner benutzt, und loescht die Dateien von root).
+             * Abgeschickt wird die angezeigte Liste; der Vorgang loescht davon nur, was dann noch entfernbar ist. */
+            $asn_tab = 'tab-settings';
+            if ($asn_wert('aktion') !== 'aufraeumen') {
+                $asn_misslungen[] = asn_t('ALLG.FORMULAR_UNBEKANNT');
+                break;
+            }
+            if (!isset($_POST['datenordner_ok'])) {
+                $asn_misslungen[] = asn_t('DATENORDNER.F_HAKEN');
+                break;
+            }
+            if (empty($asn_cfg['container_ein'])) {
+                $asn_misslungen[] = asn_grund_text('VERWALTUNG_AUS');
+                break;
+            }
+            $asn_dn = array_values(array_filter(explode(',', $asn_wert('namen')), 'strlen'));
+            $asn_dnf = array_filter($asn_dn, function ($n) {
+                return asn_datenordner_muster($n) === '';
+            });
+            if (!$asn_dn || count($asn_dn) > 200 || $asn_dnf) {
+                $asn_fehler[] = sprintf(asn_t('DATENORDNER.F_NAMEN'), count($asn_dnf));
+                break;
+            }
+            if (!asn_json_schreiben($asn_p['datadir'] . '/daten_aufraeumen.json', array('namen' => array_values(array_unique($asn_dn)),
+                'zeit' => time()), 0600)) {
+                $asn_misslungen[] = asn_t('EINST.F_SPEICHERN');
+                break;
+            }
+            $asn_vorgang_los('daten_aufraeumen');
+            break;
+
         case 'konto':
             $asn_tab = 'tab-settings';
             $asn_neu = $asn_cfg;
@@ -644,6 +677,9 @@ $asn_get = function ($k) {
 };
 $asn_sonnlog = ($asn_tab === 'tab-log' && $asn_get('sonnlog') === '1') ? asn_sonn_protokoll() : null;
 $asn_abbilder = ($asn_tab === 'tab-settings' && $asn_get('abbilder') === '1') ? asn_abbilder_lage() : null;
+/* 0.9.15: alte Datenordner nur auf Knopfdruck; Docker nur mit Verwaltung und nicht, solange ein Vorgang laeuft. */
+$asn_dordner = ($asn_tab === 'tab-settings' && $asn_get('datenordner') === '1')
+    ? asn_datenordner_lage(!empty($asn_cfg['container_ein']) && !$asn_va['laeuft']) : null;
 $asn_fassungen = ($asn_tab === 'tab-settings' && in_array($asn_get('fassungen'), array('1', '2'), true)) ? asn_fassungen($asn_get('fassungen') === '2') : null;
 $asn_verw_url = asn_verwaltung_url($asn_cfg);
 
@@ -1210,6 +1246,48 @@ $asn_mu_json = $asn_mu_wahl !== '' ? json_encode($asn_mu_wahl, JSON_HEX_TAG | JS
 <div class="sm-feld"><label><input data-role="none" type="checkbox" name="aufraeumen_ok" value="1"> <?= asn_e(sprintf(asn_t('ABBILDER.HAKEN'), $asn_azahl, asn_mb($asn_afrei))) ?></label></div>
 <div class="sm-knopfreihe">
 <button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="aufraeumen"<?= $asn_aus ?>><?= asn_e(asn_t('ABBILDER.K_AUFRAEUMEN')) ?></button>
+</div>
+</form>
+<?php } ?>
+<?php } ?>
+<?php } ?>
+
+<h2 id="asn_datenordner"><?= asn_e(asn_t('DATENORDNER.H')) ?></h2>
+<p class="sm-hilfe"><?= asn_e(asn_t('DATENORDNER.TEXT')) ?></p>
+<div class="sm-knopfreihe">
+<a class="sm-btn sm-b-lesen" href="index.php?form=settings&amp;datenordner=1#asn_datenordner"><?= asn_e(asn_t('DATENORDNER.K_ZEIGEN')) ?></a>
+</div>
+<?php if ($asn_dordner !== null) { list($asn_dok, $asn_dg, $asn_dl, $asn_dfrei, $asn_ddocker) = $asn_dordner; ?>
+<?php if (!$asn_dok) { ?>
+<div class="sm-warnung"><?= asn_e(asn_t('DATENORDNER.F_LAGE') . ' ' . asn_grund_text($asn_dg)) ?></div>
+<?php } elseif (!$asn_dl) { ?>
+<p class="sm-hilfe"><?= asn_e(sprintf(asn_t('DATENORDNER.KEINE'), basename($asn_p['sonn']))) ?></p>
+<?php } else { $asn_dnamen = array(); ?>
+<?php if (!$asn_ddocker) { ?>
+<div class="sm-hinweis"><?= asn_e(asn_t($asn_va['laeuft'] ? 'DATENORDNER.H_VORGANG' : 'DATENORDNER.H_OHNE_DOCKER')) ?></div>
+<?php } ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= asn_e(asn_t('DATENORDNER.SP_NAME')) ?></th><th><?= asn_e(asn_t('DATENORDNER.SP_GROESSE')) ?></th>
+<th><?= asn_e(asn_t('DATENORDNER.SP_DATUM')) ?></th><th><?= asn_e(asn_t('DATENORDNER.SP_ART')) ?></th></tr>
+<?php foreach ($asn_dl as $asn_de) { $asn_dweg = in_array($asn_de['art'], array('verwaist', 'gescheitert'), true); if ($asn_dweg) { $asn_dnamen[] = $asn_de['name']; } ?>
+<tr><td><span class="sm-mono"><?= asn_e($asn_de['name']) ?></span></td>
+<td><?= asn_e(($asn_de['vollstaendig'] ? '' : asn_t('DATENORDNER.MINDESTENS') . ' ') . asn_mb($asn_de['groesse'])) ?></td>
+<td><?= asn_e($asn_de['datum'] !== '' ? $asn_de['datum'] : '-') ?></td>
+<td><?= $asn_dweg ? '<b class="sm-aus">' . asn_e(asn_t('DATENORDNER.ART_' . strtoupper($asn_de['art']))) . '</b>' : asn_e(asn_t('DATENORDNER.ART_' . strtoupper($asn_de['art']))) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p><?= asn_e(sprintf(asn_t('DATENORDNER.FREI'), count($asn_dnamen), asn_mb($asn_dfrei))) ?></p>
+<?php if ($asn_dnamen && $asn_ddocker) { ?>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
+<input data-role="none" type="hidden" name="fmt" value="<?= asn_e($asn_fmt) ?>">
+<input data-role="none" type="hidden" name="formular" value="datenordner">
+<input data-role="none" type="hidden" name="namen" value="<?= asn_e(implode(',', $asn_dnamen)) ?>">
+<div class="sm-feld"><label><input data-role="none" type="checkbox" name="datenordner_ok" value="1"> <?= asn_e(sprintf(asn_t('DATENORDNER.HAKEN'), count($asn_dnamen), asn_mb($asn_dfrei))) ?></label></div>
+<div class="sm-knopfreihe">
+<button data-role="none" class="sm-btn sm-b-aktion asn-vorgang-knopf" type="submit" name="aktion" value="aufraeumen"<?= $asn_aus ?>><?= asn_e(asn_t('DATENORDNER.K_AUFRAEUMEN')) ?></button>
 </div>
 </form>
 <?php } ?>
