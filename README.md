@@ -10,7 +10,7 @@ DLNA/UPnP, Snapcast, Sendspin, Squeezelite, Music-Assistant-Player); mit diesem 
 **Amazon Echo wird nicht unterstützt** – sonn core 4.0.0-beta.22 hat keinen Ausgang für Echo/Alexa (Bluetooth nur als
 Eingang). Für Ansagen und Radio auf Echo-Geräten gibt es das Plugin [Alexa NG](https://wiki.loxberry.de/plugins/alexang/start).
 
-Version 0.9.16 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.17 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
 **Stand 0.9.3:** vierte Fassung (0.9.0 bis 0.9.2 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
@@ -19,6 +19,11 @@ Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
 
 ---
+
+## Neu in 0.9.17
+
+- **Einstellungen sichern und zurückspielen mit dem gemeinsamen Sicherungsmodul 1.2.11 statt 1.2.9:** Neu in 1.2.10 ist, dass ein leerer Wert auch in einem Teil der Sicherung, der nur aus einem einzelnen Wert besteht (etwa einem Zugangsschlüssel in einer eigenen Datei), einen gesetzten Wert nicht mehr überschreibt; er bleibt stehen und wird in der Meldung genannt. Dieses Plugin führt keinen solchen Teil; an seinem Verhalten ändert sich dadurch nichts. Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4 (3 Vorfassungen zurückgespielt). Am Gerät nicht gemessen.
+- **Sicherungsmodul 1.2.11:** Wandelt ein Plugin beim Zurückspielen eine Sicherung aus einer Textdatei um, sagt die Meldung das jetzt mit einem gemeinsamen Satz, und Mängel darin werden in allen Plugins mit denselben Bezeichnungen genannt. Dieses Plugin wandelt keine Textdateien um; an seinem Verhalten ändert sich dadurch nichts. Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4. Am Gerät nicht gemessen.
 
 ## Neu in 0.9.16
 
