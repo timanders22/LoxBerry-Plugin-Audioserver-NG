@@ -10,7 +10,7 @@ DLNA/UPnP, Snapcast, Sendspin, Squeezelite, Music-Assistant-Player); mit diesem 
 **Amazon Echo wird nicht unterstützt** – sonn core 4.0.0-beta.22 hat keinen Ausgang für Echo/Alexa (Bluetooth nur als
 Eingang). Für Ansagen und Radio auf Echo-Geräten gibt es das Plugin [Alexa NG](https://wiki.loxberry.de/plugins/alexang/start).
 
-Version 0.9.17 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.18 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
 **Stand 0.9.3:** vierte Fassung (0.9.0 bis 0.9.2 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
@@ -19,6 +19,12 @@ Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
 
 ---
+
+## Neu in 0.9.18
+
+- **Behoben – Takt lief während des Updates:** Während einer Aktualisierung ruht jetzt der Minutentakt, bevor irgendetwas angelegt wird. Bis 0.9.17 lief er in der Lücke zwischen dem Löschen der alten Fassung und `postinstall.sh` und legte im Datenordner `befehle/` neu an. Ist die Marke eine Stunde oder älter, liegt sie in der Zukunft oder enthält sie keine Unixzeit, gilt sie nicht, damit eine abgebrochene Aktualisierung den Takt nicht dauerhaft stilllegt. Alle Plugins dieser Reihe fragen die Marke mit demselben Block ab. Es wirkt schon beim Update auf diese Fassung, denn der Installer legt die Takte der neuen Fassung vor der Lücke an, und das `preupgrade.sh` der neuen Fassung legt die Marke an. Gemessen in einer Nachstellung des Update-Ablaufs auf dem Arbeitsrechner (WSL); am Gerät nicht gemessen.
+- **Geändert – Befehlsbrücke 1.0.3:** Während einer Aktualisierung legen Wächter und Start der Befehlsbrücke nichts mehr an. Bis 1.0.2 entstanden in der Lücke `befehle/`, die Optionsdateien und die Sperrdatei, bevor die Marke den Start abwies. Gemessen in einer Nachstellung auf dem Arbeitsrechner (WSL); am Gerät nicht gemessen.
+- **Gemeinsames Sprachmodul 1.4.4:** Das Modul bringt einen gemeinsamen Weg mit, die Einstellungen der Sprachausgabe in der Konfiguration zu prüfen: unbekannte Einträge verwerfen, jeden ungültigen Eintrag einzeln nennen und alles mit denselben Sätzen melden. Dieses Plugin ruft diesen Weg nicht auf; an seinem Verhalten ändert sich dadurch nichts. Gemessen auf dem Arbeitsrechner: Abschrift byte-gleich mit der Stammfassung 1.4.4, Abschnitt [ANSAGE] der Sprachdateien um die drei Sätze dieses Wegs ergänzt und gleich der Textdatei 1.4.4 (317 Schlüssel), Syntax unter PHP 7.4 und 8.4; am Gerät nicht gemessen.
 
 ## Neu in 0.9.17
 
