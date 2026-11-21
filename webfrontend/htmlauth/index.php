@@ -685,7 +685,8 @@ $asn_verw_url = asn_verwaltung_url($asn_cfg);
 
 $asn_rahmen = class_exists('LBWeb', false);
 if ($asn_rahmen) {
-    LBWeb::lbheader('Audioserver NG', 'https://wiki.loxberry.de/plugins/audioserverng/start', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel('Audioserver NG', __DIR__), 'https://wiki.loxberry.de/plugins/audioserverng/start', 'help.html');
 }
 ?>
 <style>
