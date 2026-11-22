@@ -10,7 +10,7 @@ DLNA/UPnP, Snapcast, Sendspin, Squeezelite, Music-Assistant-Player); mit diesem 
 **Amazon Echo wird nicht unterstützt** – sonn core 4.0.0-beta.22 hat keinen Ausgang für Echo/Alexa (Bluetooth nur als
 Eingang). Für Ansagen und Radio auf Echo-Geräten gibt es das Plugin [Alexa NG](https://wiki.loxberry.de/plugins/alexang/start).
 
-Version 0.9.19 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
+Version 0.9.20 · Lizenz MIT · LoxBerry ab 3.0.0 · BETA
 
 **Stand 0.9.3:** vierte Fassung (0.9.0 bis 0.9.2 vom 01.11.2026), **BETA**. Gegen Attrappen geprüft. Probe mit sonn core 4.0.0-beta.22 am Gerät
 (30.10.2026, sonn von Hand gestartet): Kopplung, Radio, Pause/Lautstärke und Klingel ohne spürbare Verzögerung
@@ -19,6 +19,11 @@ Knopf, Kopplung, Radio, Lautstärke, Pause, Durchsage aus der App, Zustandswerte
 Neuanlegen des Containers bestanden; Klingel und Wecker siehe „Grenzen“.
 
 ---
+
+## Neu in 0.9.20
+
+- Gemeinsames Sprachmodul 1.5.0 (Entscheidung des Hausherrn 22.11.2026): Die Nachtruhe der Ansagen kann an Nicht-Schultagen (Samstag, Sonntag, Feiertage, Ferien) später enden. Neues Feld „Nachtruhe an Nicht-Schultagen bis“ bei „Wann gesprochen wird“, ab Werk leer: Dann gilt die Zeit, die im Plugin Ferien und Feiertage eingestellt ist (MQTT-Thema `haus/ansage/nachtruhe_frei_bis`); ohne sie endet die Nachtruhe wie an Schultagen. Ob heute ein Schultag ist, sagt `haus/kalender/heute/frei` (nur bei `haus/kalender/datum` = heute); ohne diese Aussage zählen nur Samstag und Sonntag. Dringende Ansagen übergehen die Nachtruhe wie bisher. Ohne Vorgabe und ohne eigene Zeit ändert sich nichts.
+- Reiter Test: neue Zeile zum Ende der Nachtruhe an Nicht-Schultagen (Quelle der Zeit, Art des heutigen Tages).
 
 ## Neu in 0.9.19
 
