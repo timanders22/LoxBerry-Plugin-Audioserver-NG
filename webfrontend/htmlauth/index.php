@@ -106,6 +106,12 @@ $asn_vorgang_los = function ($auftrag) use (&$asn_meldungen, &$asn_misslungen) {
 
 /* ---------------- Handler (nur POST mit gueltigem Merkmal; jeder fasst nur seine eigenen Schluessel an) ---------------- */
 /* Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+/* 0.9.21: Testmeldung an SignalBot (Knopf unter den Sprachansagen) - wie die Testansage darunter. */
+if ($asn_post && isset($_POST['meld_test'])) {
+    list($asn_at, $asn_ag) = asn_meld_test();
+    if ($asn_at) { $asn_meldungen[] = asn_t('SIGNALMELDUNG.T_OK'); } else { $asn_fehler[] = $asn_ag; }
+    $asn_tab = 'tab-settings';
+}
 if ($asn_post && isset($_POST['ansage_test'])) {
     list($asn_at, $asn_ag) = asn_ansage_test();
     // 0.9.6 (K5): gesammelt wird Klartext, die Ausgabe unten maskiert. Bis 0.9.5 stand ein Apostroph als &#039; auf dem Schirm.
